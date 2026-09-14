@@ -10,7 +10,7 @@
 // rules, outbound selection, process metadata, or connection/session semantics.
 // Those application-facing responsibilities belong to the consumer.
 //
-// Exported BPF map, program, and FD accessors return borrowed values for the
-// sibling runtime package. They do not transfer ownership and callers must not
-// close or retain them beyond the owning backend's lifetime.
+// Raw BPF maps, programs, and file descriptors are confined to internal/core.
+// The sibling runtime package can borrow them through internal-only handles;
+// consumers receive only lifecycle owners and value-level operations.
 package singebpf

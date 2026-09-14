@@ -42,11 +42,10 @@ Each directory under `runtime/` remains part of a complete resource owner:
 
 This unit owns the TC/TCX links or filters, interface locks, clsact fallback,
 delivery veth, policy rules/routes, modified sysctls, retired resources,
-rollback, and the `TCBackend`. Raw links, filters, qdiscs, routes, and sysctl
-records remain private. Backend program/map accessors exist only because the
-separate `runtime` package must construct attachments; their handles and FDs
-are borrowed, remain owned by the backend, and must never be closed or retained
-by a consumer.
+rollback, and the `TCBackend`. Raw links, filters, qdiscs, routes, sysctl
+records, BPF maps, programs, and file descriptors remain under
+`internal/core`. The separate `runtime` package can borrow backend handles only
+through the module's internal bridge; consumers cannot access or close them.
 
 ### Shared packet-rewrite runtime
 
@@ -75,11 +74,9 @@ A consumer adapter should consume only:
   snapshots;
 - explicit callback values that contain no consumer application types.
 
-Raw program/map handles and FDs are not general extension points. They are
-valid only while the owning backend remains open and are intended solely for
-the module's runtime adapters. Moving the core behind an internal package may
-eventually enforce this rule structurally without changing the high-level
-runtime interfaces.
+Raw program/map handles and FDs are not extension points. They are valid only
+while the owning backend remains open and are structurally confined to
+`internal/core`; the public façade deliberately exposes no raw accessor.
 
 The exported `runtime.TCRuntime` and
 `runtime.SharedPacketRewriteRuntime` interfaces are the mechanism contracts. An

@@ -84,7 +84,7 @@ func (d *tcDataPlane) createTCDeliveryLink() (*tcDeliveryLink, error) {
 	delivery.filter, err = attachTCFilter(
 		delivery.delivery,
 		netlink.HANDLE_MIN_INGRESS,
-		backend.DeliveryIngressProgramFD(),
+		rawTCBackend(backend).DeliveryIngressProgramFD(),
 		"sb_tc_deliver",
 		tcDeliveryFilterHandle,
 		priority,

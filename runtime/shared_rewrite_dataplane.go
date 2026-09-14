@@ -467,20 +467,20 @@ func attachSharedRewriteInterfaceWithOptions(
 	if priority == defaultTCPriority && tcxSupport.Load() != tcxSupportUnavailable {
 		attachment.egressLink, err = link.AttachTCX(link.TCXOptions{
 			Interface: device.Attrs().Index,
-			Program:   backend.EgressProgram(),
+			Program:   rawSharedNetworkBackend(backend).EgressProgram(),
 			Attach:    CiliumEBPF.AttachTCXEgress,
 		})
 		if err == nil {
 			attachment.ingressLink, err = link.AttachTCX(link.TCXOptions{
 				Interface: device.Attrs().Index,
-				Program:   backend.IngressProgram(),
+				Program:   rawSharedNetworkBackend(backend).IngressProgram(),
 				Attach:    CiliumEBPF.AttachTCXIngress,
 			})
 		}
 		if err == nil && backend.FakeIPICMPEnabled() {
 			attachment.icmpLink, err = link.AttachTCX(link.TCXOptions{
 				Interface: device.Attrs().Index,
-				Program:   backend.FakeIPICMPSharedReplyProgram(commonEBPF.TCLinkFramingEthernet),
+				Program:   rawSharedNetworkBackend(backend).FakeIPICMPSharedReplyProgram(commonEBPF.TCLinkFramingEthernet),
 				Attach:    CiliumEBPF.AttachTCXIngress,
 			})
 		}
@@ -498,11 +498,11 @@ func attachSharedRewriteInterfaceWithOptions(
 	if err = ensureTCClsact(device); err != nil {
 		return cleanup(err)
 	}
-	attachment.egressFilter, err = attachTCFilter(device, netlink.HANDLE_MIN_EGRESS, backend.EgressProgramFD(), attachment.egressName, attachment.egressHandle, priority)
+	attachment.egressFilter, err = attachTCFilter(device, netlink.HANDLE_MIN_EGRESS, rawSharedNetworkBackend(backend).EgressProgramFD(), attachment.egressName, attachment.egressHandle, priority)
 	if err != nil {
 		return cleanup(err)
 	}
-	attachment.ingressFilter, err = attachTCFilter(device, netlink.HANDLE_MIN_INGRESS, backend.IngressProgramFD(), attachment.ingressName, attachment.ingressHandle, priority)
+	attachment.ingressFilter, err = attachTCFilter(device, netlink.HANDLE_MIN_INGRESS, rawSharedNetworkBackend(backend).IngressProgramFD(), attachment.ingressName, attachment.ingressHandle, priority)
 	if err != nil {
 		return cleanup(err)
 	}
@@ -510,7 +510,7 @@ func attachSharedRewriteInterfaceWithOptions(
 		attachment.icmpFilter, err = attachTCFilter(
 			device,
 			netlink.HANDLE_MIN_INGRESS,
-			backend.FakeIPICMPSharedReplyProgramFD(commonEBPF.TCLinkFramingEthernet),
+			rawSharedNetworkBackend(backend).FakeIPICMPSharedReplyProgramFD(commonEBPF.TCLinkFramingEthernet),
 			attachment.icmpName,
 			attachment.icmpHandle,
 			priority,

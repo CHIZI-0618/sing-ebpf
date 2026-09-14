@@ -421,7 +421,7 @@ func attachTCInterfaceWithLock(
 		attachment.localFilter, err = attachTCFilter(
 			link,
 			netlink.HANDLE_MIN_EGRESS,
-			backend.LocalEgressProgramFD(framing),
+			rawTCBackend(backend).LocalEgressProgramFD(framing),
 			"sb_tc_local",
 			tcLocalFilterHandle,
 			priority,
@@ -433,7 +433,7 @@ func attachTCInterfaceWithLock(
 			attachment.localICMPFilter, err = attachTCFilter(
 				link,
 				netlink.HANDLE_MIN_EGRESS,
-				backend.FakeIPICMPLocalReplyProgramFD(framing),
+				rawTCBackend(backend).FakeIPICMPLocalReplyProgramFD(framing),
 				"sb_icmp_local",
 				tcLocalICMPReplyFilterHandle,
 				priority,
@@ -447,7 +447,7 @@ func attachTCInterfaceWithLock(
 		attachment.sharedFilter, err = attachTCFilter(
 			link,
 			netlink.HANDLE_MIN_INGRESS,
-			backend.SharedIngressProgramFD(framing),
+			rawTCBackend(backend).SharedIngressProgramFD(framing),
 			"sb_tc_shared",
 			tcSharedFilterHandle,
 			priority,
@@ -459,7 +459,7 @@ func attachTCInterfaceWithLock(
 			attachment.sharedICMPFilter, err = attachTCFilter(
 				link,
 				netlink.HANDLE_MIN_INGRESS,
-				backend.FakeIPICMPSharedReplyProgramFD(framing),
+				rawTCBackend(backend).FakeIPICMPSharedReplyProgramFD(framing),
 				"sb_icmp_shared",
 				tcSharedICMPReplyFilterHandle,
 				priority,
@@ -492,10 +492,10 @@ func attachTCXInterface(linkDevice netlink.Link, backend *commonEBPF.TCBackend, 
 		icmpLink    *tcxAttachedLink
 	}{
 		{attachment.role.local, "local", CiliumEBPF.AttachTCXEgress,
-			backend.LocalEgressProgram(attachment.framing), backend.FakeIPICMPLocalReplyProgram(attachment.framing),
+			rawTCBackend(backend).LocalEgressProgram(attachment.framing), rawTCBackend(backend).FakeIPICMPLocalReplyProgram(attachment.framing),
 			&attachment.localLink, &attachment.localICMPLink},
 		{attachment.role.shared, "shared", CiliumEBPF.AttachTCXIngress,
-			backend.SharedIngressProgram(attachment.framing), backend.FakeIPICMPSharedReplyProgram(attachment.framing),
+			rawTCBackend(backend).SharedIngressProgram(attachment.framing), rawTCBackend(backend).FakeIPICMPSharedReplyProgram(attachment.framing),
 			&attachment.sharedLink, &attachment.sharedICMPLink},
 	}
 	for _, pair := range pairs {
@@ -624,7 +624,7 @@ func updateTCInterfaceAttachmentWithOps(
 		attachment.localFilter, err = ops.attachFilter(
 			link,
 			netlink.HANDLE_MIN_EGRESS,
-			backend.LocalEgressProgramFD(attachment.framing),
+			rawTCBackend(backend).LocalEgressProgramFD(attachment.framing),
 			"sb_tc_local",
 			tcLocalFilterHandle,
 			priority,
@@ -638,7 +638,7 @@ func updateTCInterfaceAttachmentWithOps(
 		attachment.localICMPFilter, err = ops.attachFilter(
 			link,
 			netlink.HANDLE_MIN_EGRESS,
-			backend.FakeIPICMPLocalReplyProgramFD(attachment.framing),
+			rawTCBackend(backend).FakeIPICMPLocalReplyProgramFD(attachment.framing),
 			"sb_icmp_local",
 			tcLocalICMPReplyFilterHandle,
 			priority,
@@ -652,7 +652,7 @@ func updateTCInterfaceAttachmentWithOps(
 		attachment.sharedFilter, err = ops.attachFilter(
 			link,
 			netlink.HANDLE_MIN_INGRESS,
-			backend.SharedIngressProgramFD(attachment.framing),
+			rawTCBackend(backend).SharedIngressProgramFD(attachment.framing),
 			"sb_tc_shared",
 			tcSharedFilterHandle,
 			priority,
@@ -666,7 +666,7 @@ func updateTCInterfaceAttachmentWithOps(
 		attachment.sharedICMPFilter, err = ops.attachFilter(
 			link,
 			netlink.HANDLE_MIN_INGRESS,
-			backend.FakeIPICMPSharedReplyProgramFD(attachment.framing),
+			rawTCBackend(backend).FakeIPICMPSharedReplyProgramFD(attachment.framing),
 			"sb_icmp_shared",
 			tcSharedICMPReplyFilterHandle,
 			priority,
@@ -711,10 +711,10 @@ func updateTCXInterfaceAttachment(
 	role tcInterfaceRole,
 ) error {
 	attach := func(local bool) error {
-		program := backend.SharedIngressProgram(attachment.framing)
+		program := rawTCBackend(backend).SharedIngressProgram(attachment.framing)
 		attachType := CiliumEBPF.AttachTCXIngress
 		if local {
-			program = backend.LocalEgressProgram(attachment.framing)
+			program = rawTCBackend(backend).LocalEgressProgram(attachment.framing)
 			attachType = CiliumEBPF.AttachTCXEgress
 		}
 		if program == nil {
@@ -753,9 +753,9 @@ func updateTCXInterfaceAttachment(
 			if icmpExisting != nil {
 				return nil
 			}
-			icmpProgram := backend.FakeIPICMPSharedReplyProgram(attachment.framing)
+			icmpProgram := rawTCBackend(backend).FakeIPICMPSharedReplyProgram(attachment.framing)
 			if local {
-				icmpProgram = backend.FakeIPICMPLocalReplyProgram(attachment.framing)
+				icmpProgram = rawTCBackend(backend).FakeIPICMPLocalReplyProgram(attachment.framing)
 			}
 			if icmpProgram == nil {
 				startErr := E.New("fakeip_icmp shared reply program is unavailable")

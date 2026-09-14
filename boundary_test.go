@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -57,5 +58,40 @@ func TestLibraryBoundary(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublicResourceTypesDoNotExposeRawKernelHandles(t *testing.T) {
+	resourceTypes := []struct {
+		name  string
+		value any
+	}{
+		{name: "SelfBypass", value: (*SelfBypass)(nil)},
+		{name: "TCBackend", value: (*TCBackend)(nil)},
+		{name: "SharedNetworkBackend", value: (*SharedNetworkBackend)(nil)},
+	}
+	forbiddenMethods := []string{
+		"Map",
+		"LocalEgressProgram",
+		"LocalEgressProgramFD",
+		"SharedIngressProgram",
+		"SharedIngressProgramFD",
+		"DeliveryIngressProgramFD",
+		"IngressProgram",
+		"IngressProgramFD",
+		"EgressProgram",
+		"EgressProgramFD",
+		"FakeIPICMPLocalReplyProgram",
+		"FakeIPICMPLocalReplyProgramFD",
+		"FakeIPICMPSharedReplyProgram",
+		"FakeIPICMPSharedReplyProgramFD",
+	}
+	for _, resourceType := range resourceTypes {
+		typeOf := reflect.TypeOf(resourceType.value)
+		for _, methodName := range forbiddenMethods {
+			if _, loaded := typeOf.MethodByName(methodName); loaded {
+				t.Errorf("%s exposes raw kernel handle accessor %s", resourceType.name, methodName)
+			}
+		}
 	}
 }

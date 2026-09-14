@@ -611,7 +611,7 @@ func (d *tcDeliveryLink) repair(backend *commonEBPF.TCBackend, priority uint16) 
 		d.filter, err = attachTCFilter(
 			delivery,
 			netlink.HANDLE_MIN_INGRESS,
-			backend.DeliveryIngressProgramFD(),
+			rawTCBackend(backend).DeliveryIngressProgramFD(),
 			"sb_tc_deliver",
 			tcDeliveryFilterHandle,
 			priority,
