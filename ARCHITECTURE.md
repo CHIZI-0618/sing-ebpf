@@ -117,10 +117,12 @@ When `AttachProcessTracker` returns both a tracker and an error, cleanup could
 not detach every legacy cgroup hook. The caller owns that incomplete tracker
 and must retry `Close`; it must not use the tracker for process lookup.
 
-Shared runtime callbacks execute while reconciliation owns the runtime lock.
-They must remain bounded and must not call back into the same runtime. This is
-an explicit adapter constraint until callback delivery is moved outside the
-transactional reconciliation section.
+Shared runtime notification callbacks are queued while reconciliation or
+cleanup owns the runtime lock and delivered in the same order after the lock is
+released. They may query or re-enter the runtime without deadlocking. The
+`PrepareBackend` hook is a synchronous resource factory rather than a
+notification; it participates in the locked reconciliation transaction, must
+not call back into the runtime, and transfers a successful backend to it.
 
 ## ABI and release rules
 

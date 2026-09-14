@@ -5,6 +5,7 @@ package runtime
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sagernet/netlink"
 )
@@ -14,6 +15,69 @@ type sharedCountingCloser struct{ attempts int }
 func (c *sharedCountingCloser) Close() error {
 	c.attempts++
 	return nil
+}
+
+func TestSharedRewritePurgeCallbackCanReenterRuntime(t *testing.T) {
+	var dataPlane *sharedRewriteDataPlane
+	var callbackErr error
+	callbackCount := 0
+	dataPlane = newSharedRewriteDataPlane(SharedPacketRewriteHooks{
+		PurgeUserspaceFlow: func() {
+			callbackCount++
+			if descriptions := dataPlane.attachmentDescriptions(); len(descriptions) != 0 {
+				callbackErr = errors.New("retired attachment remained visible during callback")
+				return
+			}
+			callbackErr = dataPlane.reconcile(nil, nil)
+		},
+	}, defaultTCPriority)
+	dataPlane.attachments["wlan0"] = &sharedRewriteAttachment{interfaceName: "wlan0"}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- dataPlane.reconcile(nil, nil)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("purge callback deadlocked while re-entering shared runtime")
+	}
+	if callbackErr != nil {
+		t.Fatalf("callback re-entry: %v", callbackErr)
+	}
+	if callbackCount != 1 {
+		t.Fatalf("purge callback count = %d, want 1", callbackCount)
+	}
+}
+
+func TestSharedRewriteCallbackEventOrder(t *testing.T) {
+	var calls []string
+	hooks := SharedPacketRewriteHooks{
+		PurgeUserspaceFlow: func() { calls = append(calls, "purge") },
+		Ready: func(attachments []string) {
+			calls = append(calls, "ready:"+attachments[0])
+		},
+		WarnFlowPurge: func(interfaceName string, err error) {
+			calls = append(calls, "warn:"+interfaceName+":"+err.Error())
+		},
+	}
+	var events sharedRewriteCallbackEvents
+	events.warnFlowPurge("wlan0", errors.New("failed"))
+	events.ready([]string{"wlan1(tcx)"})
+	events.purgeUserspaceFlow()
+	events.dispatch(hooks)
+	want := []string{"warn:wlan0:failed", "ready:wlan1(tcx)", "purge"}
+	if len(calls) != len(want) {
+		t.Fatalf("callback order = %v, want %v", calls, want)
+	}
+	for index := range want {
+		if calls[index] != want[index] {
+			t.Fatalf("callback order = %v, want %v", calls, want)
+		}
+	}
 }
 
 func TestSharedRewriteAttachmentCloseRetainsFailedResources(t *testing.T) {

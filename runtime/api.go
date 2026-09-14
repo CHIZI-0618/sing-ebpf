@@ -160,9 +160,11 @@ type SharedPacketRewriteRuntime interface {
 }
 
 // SharedPacketRewriteHooks are the only application actions requested by the
-// shared runtime. Callbacks run while reconciliation owns the runtime lock,
-// must remain bounded, and must not call back into the same runtime directly.
-// PrepareBackend transfers ownership of a successful result to the runtime.
+// shared runtime. PurgeUserspaceFlow, Ready, and WarnFlowPurge are delivered
+// after the runtime lock is released and may call back into the runtime.
+// PrepareBackend is a synchronous factory used by the locked reconciliation
+// transaction; it must not call back into the runtime and transfers ownership
+// of a successful result to it.
 type SharedPacketRewriteHooks struct {
 	PrepareBackend     func() (*core.SharedNetworkBackend, error)
 	PurgeUserspaceFlow func()

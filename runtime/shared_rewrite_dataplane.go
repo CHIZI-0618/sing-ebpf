@@ -50,6 +50,61 @@ type sharedRewriteDataPlane struct {
 	closed             bool
 }
 
+type sharedRewriteCallbackKind uint8
+
+const (
+	sharedRewriteCallbackPurgeUserspaceFlow sharedRewriteCallbackKind = iota
+	sharedRewriteCallbackReady
+	sharedRewriteCallbackWarnFlowPurge
+)
+
+type sharedRewriteCallbackEvent struct {
+	kind          sharedRewriteCallbackKind
+	attachments   []string
+	interfaceName string
+	err           error
+}
+
+type sharedRewriteCallbackEvents []sharedRewriteCallbackEvent
+
+func (e *sharedRewriteCallbackEvents) purgeUserspaceFlow() {
+	*e = append(*e, sharedRewriteCallbackEvent{kind: sharedRewriteCallbackPurgeUserspaceFlow})
+}
+
+func (e *sharedRewriteCallbackEvents) ready(attachments []string) {
+	*e = append(*e, sharedRewriteCallbackEvent{
+		kind:        sharedRewriteCallbackReady,
+		attachments: attachments,
+	})
+}
+
+func (e *sharedRewriteCallbackEvents) warnFlowPurge(interfaceName string, err error) {
+	*e = append(*e, sharedRewriteCallbackEvent{
+		kind:          sharedRewriteCallbackWarnFlowPurge,
+		interfaceName: interfaceName,
+		err:           err,
+	})
+}
+
+func (e sharedRewriteCallbackEvents) dispatch(hooks SharedPacketRewriteHooks) {
+	for _, event := range e {
+		switch event.kind {
+		case sharedRewriteCallbackPurgeUserspaceFlow:
+			if hooks.PurgeUserspaceFlow != nil {
+				hooks.PurgeUserspaceFlow()
+			}
+		case sharedRewriteCallbackReady:
+			if hooks.Ready != nil {
+				hooks.Ready(event.attachments)
+			}
+		case sharedRewriteCallbackWarnFlowPurge:
+			if hooks.WarnFlowPurge != nil {
+				hooks.WarnFlowPurge(event.interfaceName, event.err)
+			}
+		}
+	}
+}
+
 type sharedRewriteAttachment struct {
 	interfaceName   string
 	interfaceIndex  int
@@ -89,21 +144,25 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 	if d == nil {
 		return nil
 	}
+	var callbackEvents sharedRewriteCallbackEvents
 	d.access.Lock()
-	defer d.access.Unlock()
+	defer func() {
+		d.access.Unlock()
+		callbackEvents.dispatch(d.hooks)
+	}()
 	if d.closed {
 		return E.New("shared packet-rewrite runtime is closed")
 	}
 	defer func() {
-		reconcileErr = E.Errors(reconcileErr, d.closeRetiredLocked())
+		reconcileErr = E.Errors(reconcileErr, d.closeRetiredLocked(&callbackEvents))
 	}()
 	changed := false
-	// Runs before the unlock on every return, including an early error exit,
-	// so a rollback that already detached something never leaves stale NAT
-	// entries behind just because reconcile gave up partway.
+	// Queue this on every return, including an early error exit, so a rollback
+	// that already detached something never leaves stale NAT entries behind
+	// just because reconcile gave up partway. Delivery happens after unlock.
 	defer func() {
-		if changed && d.hooks.PurgeUserspaceFlow != nil {
-			d.hooks.PurgeUserspaceFlow()
+		if changed {
+			callbackEvents.purgeUserspaceFlow()
 		}
 	}()
 
@@ -257,7 +316,7 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 				replacement.restoreLocalnet = true
 				previous.restoreLocalnet = false
 			}
-			if err := d.detachLocked(previous); err != nil {
+			if err := d.detachLocked(previous, &callbackEvents); err != nil {
 				// The candidate is already active. Keep it as the committed state
 				// and report the old attachment cleanup failure to the caller.
 				closeErr = E.Errors(closeErr, E.Cause(err, "detach shared packet-rewrite interface ", previous.interfaceName))
@@ -272,7 +331,7 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 			}
 			replacement.lock = lock
 		} else {
-			if err := d.detachLocked(previous); err != nil {
+			if err := d.detachLocked(previous, &callbackEvents); err != nil {
 				// Continue committing the candidate topology so a stale attachment
 				// cannot prevent a newly discovered interface from being used.
 				closeErr = E.Errors(closeErr, E.Cause(err, "detach shared packet-rewrite interface ", previous.interfaceName))
@@ -290,20 +349,16 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 	d.enabled = wantEnabled
 	if wantEnabled && !d.ready {
 		d.ready = true
-		if d.hooks.Ready != nil {
-			d.hooks.Ready(d.attachmentDescriptionsLocked())
-		}
+		callbackEvents.ready(d.attachmentDescriptionsLocked())
 	}
 
 	return closeErr
 }
 
-func (d *sharedRewriteDataPlane) detachLocked(attachment *sharedRewriteAttachment) error {
+func (d *sharedRewriteDataPlane) detachLocked(attachment *sharedRewriteAttachment, callbackEvents *sharedRewriteCallbackEvents) error {
 	if d.backend != nil {
 		if _, _, err := d.backend.PurgeInterfaceFlows(uint32(attachment.interfaceIndex), d.backend.MapCapacity().Proxy); err != nil {
-			if d.hooks.WarnFlowPurge != nil {
-				d.hooks.WarnFlowPurge(attachment.interfaceName, err)
-			}
+			callbackEvents.warnFlowPurge(attachment.interfaceName, err)
 		}
 	}
 	return attachment.Close()
@@ -365,8 +420,12 @@ func (d *sharedRewriteDataPlane) Close() error {
 	if d == nil {
 		return nil
 	}
+	var callbackEvents sharedRewriteCallbackEvents
 	d.access.Lock()
-	defer d.access.Unlock()
+	defer func() {
+		d.access.Unlock()
+		callbackEvents.dispatch(d.hooks)
+	}()
 	if d.closed {
 		return nil
 	}
@@ -376,12 +435,12 @@ func (d *sharedRewriteDataPlane) Close() error {
 		d.enabled = false
 	}
 	for name, attachment := range d.attachments {
-		closeErr = E.Errors(closeErr, d.detachLocked(attachment))
+		closeErr = E.Errors(closeErr, d.detachLocked(attachment, &callbackEvents))
 		if attachment.IsClosed() {
 			delete(d.attachments, name)
 		}
 	}
-	closeErr = E.Errors(closeErr, d.closeRetiredLocked())
+	closeErr = E.Errors(closeErr, d.closeRetiredLocked(&callbackEvents))
 	if len(d.attachments) != 0 || len(d.retiredAttachments) != 0 {
 		return closeErr
 	}
@@ -397,10 +456,10 @@ func (d *sharedRewriteDataPlane) Close() error {
 	return closeErr
 }
 
-func (d *sharedRewriteDataPlane) closeRetiredLocked() error {
+func (d *sharedRewriteDataPlane) closeRetiredLocked(callbackEvents *sharedRewriteCallbackEvents) error {
 	var closeErr error
 	for _, attachment := range d.retiredAttachments {
-		closeErr = E.Errors(closeErr, d.detachLocked(attachment))
+		closeErr = E.Errors(closeErr, d.detachLocked(attachment, callbackEvents))
 	}
 	d.retiredAttachments = openSharedRewriteAttachments(d.retiredAttachments)
 	return closeErr
