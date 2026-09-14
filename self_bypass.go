@@ -71,7 +71,8 @@ func NewSelfBypass() (*SelfBypass, error) {
 	return &SelfBypass{sockets: sockets}, nil
 }
 
-// Map returns the map that must be shared with the local TC programs.
+// Map returns the map that must be shared with the local TC programs. The map
+// is borrowed: callers must not close or retain it beyond SelfBypass.Close.
 func (b *SelfBypass) Map() *CiliumEBPF.Map {
 	if b == nil {
 		return nil

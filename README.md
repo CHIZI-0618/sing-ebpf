@@ -57,6 +57,13 @@ rollback state and must be retained until `Close` succeeds. A shared runtime
 waiting for its first interface is open, not closed, even before its backend
 factory has been called.
 
+Exported `*ebpf.Map`, `*ebpf.Program`, and raw FD accessors are borrowed views
+used by the `runtime` adapter while constructing attachments. They never
+transfer ownership: callers must not close or retain them, and must serialize
+their use with the owning backend's lifecycle. Likewise, a non-nil
+`ProcessTracker` returned with an attach error owns incomplete rollback state
+and must be retained until `Close` succeeds.
+
 ## Packet paths
 
 The library has four concrete backend choices: local `tc` or `cgroup`, and

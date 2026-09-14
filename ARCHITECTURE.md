@@ -42,8 +42,11 @@ Each directory under `runtime/` remains part of a complete resource owner:
 
 This unit owns the TC/TCX links or filters, interface locks, clsact fallback,
 delivery veth, policy rules/routes, modified sysctls, retired resources,
-rollback, and the `TCBackend`. No raw link, filter, qdisc, route, sysctl record,
-or program FD becomes public API.
+rollback, and the `TCBackend`. Raw links, filters, qdiscs, routes, and sysctl
+records remain private. Backend program/map accessors exist only because the
+separate `runtime` package must construct attachments; their handles and FDs
+are borrowed, remain owned by the backend, and must never be closed or retained
+by a consumer.
 
 ### Shared packet-rewrite runtime
 
@@ -71,6 +74,12 @@ A consumer adapter should consume only:
 - reconciliation, enable/disable, health, close, and value-only diagnostic
   snapshots;
 - explicit callback values that contain no consumer application types.
+
+Raw program/map handles and FDs are not general extension points. They are
+valid only while the owning backend remains open and are intended solely for
+the module's runtime adapters. Moving the core behind an internal package may
+eventually enforce this rule structurally without changing the high-level
+runtime interfaces.
 
 The exported `runtime.TCRuntime` and
 `runtime.SharedPacketRewriteRuntime` interfaces are the mechanism contracts. An
@@ -106,6 +115,15 @@ Startup failure uses the same owner and reverse-order cleanup. A runtime may
 remove only routes, rules, qdiscs, sysctls, links, and attachments it created or
 positively reclaimed as its own. It must never delete an unrelated object's
 state solely because a numeric handle matches.
+
+When `AttachProcessTracker` returns both a tracker and an error, cleanup could
+not detach every legacy cgroup hook. The caller owns that incomplete tracker
+and must retry `Close`; it must not use the tracker for process lookup.
+
+Shared runtime callbacks execute while reconciliation owns the runtime lock.
+They must remain bounded and must not call back into the same runtime. This is
+an explicit adapter constraint until callback delivery is moved outside the
+transactional reconciliation section.
 
 ## ABI and release rules
 
