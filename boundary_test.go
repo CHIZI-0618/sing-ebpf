@@ -95,3 +95,10 @@ func TestPublicResourceTypesDoNotExposeRawKernelHandles(t *testing.T) {
 		}
 	}
 }
+
+func TestZeroTCBackendPolicyUpdateReturnsError(t *testing.T) {
+	backend := new(TCBackend)
+	if _, err := backend.UpdateCompiledBypassCIDR(BypassCIDRPolicy{}); err == nil {
+		t.Fatal("zero TC backend policy update unexpectedly succeeded")
+	}
+}

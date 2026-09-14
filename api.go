@@ -3,6 +3,7 @@
 package singebpf
 
 import (
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -267,7 +268,11 @@ func (b *TCBackend) UpdateHostAddresses(addresses []netip.Addr) error {
 	return core.UnwrapTCBackend(b).UpdateHostAddresses(addresses)
 }
 func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	return core.UnwrapTCBackend(b).UpdateCompiledBypassCIDR(policy)
+	backend := core.UnwrapTCBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized TC eBPF backend")
+	}
+	return backend.UpdateCompiledBypassCIDR(policy)
 }
 func (b *TCBackend) TCPListenerLookupMode() string {
 	return core.UnwrapTCBackend(b).TCPListenerLookupMode()
