@@ -2,6 +2,8 @@
 
 package core
 
+import "reflect"
+
 // The handle types deliberately expose no exported accessors. Public facade
 // types embed them, which promotes these package-private methods into their
 // method sets. Code inside this internal package can therefore unwrap a facade
@@ -20,7 +22,7 @@ func (h SelfBypassHandle) selfBypassBackend() *SelfBypass {
 }
 
 func UnwrapSelfBypass(value any) *SelfBypass {
-	if value == nil {
+	if nilFacade(value) {
 		return nil
 	}
 	carrier, loaded := value.(interface{ selfBypassBackend() *SelfBypass })
@@ -64,7 +66,7 @@ func (h TCBackendHandle) tcBackend() *TCBackend {
 }
 
 func UnwrapTCBackend(value any) *TCBackend {
-	if value == nil {
+	if nilFacade(value) {
 		return nil
 	}
 	carrier, loaded := value.(interface{ tcBackend() *TCBackend })
@@ -87,7 +89,7 @@ func (h SharedNetworkBackendHandle) sharedNetworkBackend() *SharedNetworkBackend
 }
 
 func UnwrapSharedNetworkBackend(value any) *SharedNetworkBackend {
-	if value == nil {
+	if nilFacade(value) {
 		return nil
 	}
 	carrier, loaded := value.(interface{ sharedNetworkBackend() *SharedNetworkBackend })
@@ -95,4 +97,12 @@ func UnwrapSharedNetworkBackend(value any) *SharedNetworkBackend {
 		panic("invalid sing-ebpf shared-network backend facade")
 	}
 	return carrier.sharedNetworkBackend()
+}
+
+func nilFacade(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
 }
