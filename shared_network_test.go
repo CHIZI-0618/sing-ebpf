@@ -4,10 +4,57 @@ package singebpf
 
 import (
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
 )
+
+func TestSharedNetworkCloseClearsFlowBookkeeping(t *testing.T) {
+	flow := SharedNetworkFlowHandle{}
+	backend := &SharedNetworkBackend{
+		runtime:             &sharedNetworkRuntime{control_map_fd: -1},
+		flowReferences:      map[SharedNetworkFlowHandle]uint32{flow: 1},
+		flowReleases:        map[SharedNetworkFlowHandle]time.Time{flow: time.Now()},
+		flowReleaseDeadline: time.Now(),
+		flowSweepCandidates: []sharedNetworkFlowEntry{{}},
+		flowSweepRemoved:    1,
+	}
+	backend.flowSweepScratch.keys = []sharedNetworkOriginalKey{{}}
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	readers.Add(1)
+	go func() {
+		defer readers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = backend.KnownFlowUsage()
+				_, _ = backend.NextTCPFlowReleaseDelay(time.Now())
+			}
+		}
+	}()
+	if err := backend.Close(); err != nil {
+		close(stop)
+		readers.Wait()
+		t.Fatalf("close shared-network backend: %v", err)
+	}
+	close(stop)
+	readers.Wait()
+
+	if usage := backend.KnownFlowUsage(); usage.Entries != 0 {
+		t.Fatalf("closed backend retained flow usage: %+v", usage)
+	}
+	if _, pending := backend.NextTCPFlowReleaseDelay(time.Now()); pending {
+		t.Fatal("closed backend retained a TCP release deadline")
+	}
+	if backend.flowSweepScratch.keys != nil || backend.flowSweepCandidates != nil || backend.flowSweepRemoved != 0 {
+		t.Fatal("closed backend retained flow sweep state")
+	}
+}
 
 func TestSharedNetworkABI(t *testing.T) {
 	if size := unsafe.Sizeof(sharedNetworkControl{}); size != 80 {

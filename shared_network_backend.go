@@ -493,6 +493,10 @@ func (b *SharedNetworkBackend) Close() error {
 	if b == nil {
 		return nil
 	}
+	// Flow sweep operations already acquire locks in this order. Keep Close in
+	// the same order so no map scan can outlive the resources it is inspecting.
+	b.flowSweepAccess.Lock()
+	defer b.flowSweepAccess.Unlock()
 	b.access.Lock()
 	defer b.access.Unlock()
 	if b.runtime == nil {
@@ -518,7 +522,16 @@ func (b *SharedNetworkBackend) Close() error {
 	b.excludeSourceIPv6 = nil
 	b.includeSourceMAC = nil
 	b.excludeSourceMAC = nil
+	b.flowAccess.Lock()
 	clear(b.flowReferences)
+	clear(b.flowReleases)
+	b.flowReferences = nil
+	b.flowReleases = nil
+	b.flowReleaseDeadline = time.Time{}
+	b.flowAccess.Unlock()
+	b.flowSweepScratch = mapScanScratch[sharedNetworkOriginalKey, sharedNetworkTokenValue]{}
+	b.flowSweepCandidates = nil
+	b.flowSweepRemoved = 0
 	return closeErr
 }
 
