@@ -18,6 +18,22 @@ type cgroupProgramLink interface {
 	Close() error
 }
 
+type retryableCgroupProgramLink interface {
+	cgroupProgramLink
+	IsClosed() bool
+}
+
+// cgroupProgramLinkCloseComplete distinguishes a failed legacy detach, whose
+// target FD must be retained for another attempt, from link.Close errors where
+// the link FD has already been consumed and cannot be retried safely.
+func cgroupProgramLinkCloseComplete(programLink cgroupProgramLink, closeErr error) bool {
+	if closeErr == nil {
+		return true
+	}
+	retryableLink, retryable := programLink.(retryableCgroupProgramLink)
+	return !retryable || retryableLink.IsClosed()
+}
+
 // attachCgroupProgram prefers BPF_LINK_CREATE, whose cgroup implementation is
 // inherently multi-program, and falls back only to BPF_PROG_ATTACH with
 // BPF_F_ALLOW_MULTI. It must never fall back to an exclusive attachment: doing
@@ -55,16 +71,30 @@ type legacyCgroupProgramLink struct {
 	cgroupFile *os.File
 	program    *CiliumEBPF.Program
 	attachType CiliumEBPF.AttachType
+	// detachProgram is nil in production. Tests inject a transient detach
+	// failure to prove that the target FD remains owned for a cleanup retry.
+	detachProgram func(int, *CiliumEBPF.Program, CiliumEBPF.AttachType) error
 }
 
 func (l *legacyCgroupProgramLink) Close() error {
 	if l == nil || l.cgroupFile == nil {
 		return nil
 	}
-	detachErr := rawDetachProgram(int(l.cgroupFile.Fd()), l.program, l.attachType)
+	detachProgram := l.detachProgram
+	if detachProgram == nil {
+		detachProgram = rawDetachProgram
+	}
+	detachErr := detachProgram(int(l.cgroupFile.Fd()), l.program, l.attachType)
+	if detachErr != nil && !errors.Is(detachErr, unix.ENOENT) && !errors.Is(detachErr, unix.ESRCH) {
+		return detachErr
+	}
 	closeErr := l.cgroupFile.Close()
 	l.cgroupFile = nil
-	return E.Errors(detachErr, closeErr)
+	return closeErr
+}
+
+func (l *legacyCgroupProgramLink) IsClosed() bool {
+	return l == nil || l.cgroupFile == nil
 }
 
 // lockCgroupFile takes the exclusive lock that marks this cgroup as managed

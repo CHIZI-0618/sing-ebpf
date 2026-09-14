@@ -5,15 +5,34 @@ package singebpf
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 	"unsafe"
 
 	CiliumEBPF "github.com/cilium/ebpf"
+	"golang.org/x/sys/unix"
 )
 
 func TestProcessSocketOwnerABI(t *testing.T) {
 	if size := unsafe.Sizeof(ProcessSocketOwner{}); size != 8 {
 		t.Fatalf("unexpected process owner size: %d", size)
+	}
+}
+
+func TestProcessTrackerCloseRetainsFailedLegacyAttachment(t *testing.T) {
+	programLink := &retryableTestCgroupProgramLink{failures: 1}
+	tracker := &ProcessTracker{links: []cgroupProgramLink{programLink}}
+	if err := tracker.Close(); !errors.Is(err, unix.EBUSY) {
+		t.Fatalf("unexpected first close error: %v", err)
+	}
+	if tracker.IsClosed() {
+		t.Fatal("process tracker discarded a failed legacy attachment")
+	}
+	if err := tracker.Close(); err != nil {
+		t.Fatalf("retry process tracker close: %v", err)
+	}
+	if !tracker.IsClosed() {
+		t.Fatal("process tracker remained open after cleanup retry")
 	}
 }
 

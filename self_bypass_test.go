@@ -3,6 +3,7 @@
 package singebpf
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"golang.org/x/sys/unix"
 )
 
 func TestProcessCgroupExclusive(t *testing.T) {
@@ -29,6 +31,23 @@ func TestProcessCgroupExclusive(t *testing.T) {
 	exclusive, err = processCgroupExclusive(directory)
 	if err != nil || exclusive {
 		t.Fatalf("shared cgroup was treated as exclusive: exclusive=%v err=%v", exclusive, err)
+	}
+}
+
+func TestSelfBypassCloseRetainsFailedLegacyAttachment(t *testing.T) {
+	programLink := &retryableTestCgroupProgramLink{failures: 1}
+	bypass := &SelfBypass{links: []cgroupProgramLink{programLink}}
+	if err := bypass.Close(); !errors.Is(err, unix.EBUSY) {
+		t.Fatalf("unexpected first close error: %v", err)
+	}
+	if bypass.IsClosed() {
+		t.Fatal("self-bypass discarded a failed legacy attachment")
+	}
+	if err := bypass.Close(); err != nil {
+		t.Fatalf("retry self-bypass close: %v", err)
+	}
+	if !bypass.IsClosed() {
+		t.Fatal("self-bypass remained open after cleanup retry")
 	}
 }
 

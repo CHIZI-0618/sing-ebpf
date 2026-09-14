@@ -97,6 +97,11 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if b.mode.Load() != uint32(SelfBypassUserspace) {
 		return nil
 	}
+	if lenOpenCgroupProgramLinks(b.links) > 0 {
+		if err := b.closeHooks(); err != nil {
+			return E.Cause(err, "finish previous eBPF self-bypass cleanup")
+		}
+	}
 	cgroupPath, err := DetectProcessCgroup2Path()
 	if err != nil {
 		return E.Cause(err, "detect process cgroup v2")
@@ -112,6 +117,9 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if createReleaseErr == nil {
 		b.mode.Store(uint32(SelfBypassCgroupSocket))
 		return nil
+	}
+	if lenOpenCgroupProgramLinks(b.links) > 0 {
+		return createReleaseErr
 	}
 	socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config)
 	if socketAddrErr == nil {
@@ -150,10 +158,13 @@ func (b *SelfBypass) attachCgroupSocket(path string) error {
 	}
 	releaseLink, err := attachCgroupProgram(path, releaseProgram, CiliumEBPF.AttachCgroupInetSockRelease)
 	if err != nil {
-		_ = createLink.Close()
 		_ = releaseProgram.Close()
-		_ = createProgram.Close()
-		return E.Cause(err, "attach eBPF self-bypass socket-release hook")
+		b.programs = []*CiliumEBPF.Program{createProgram}
+		b.links = []cgroupProgramLink{createLink}
+		return E.Errors(
+			E.Cause(err, "attach eBPF self-bypass socket-release hook"),
+			b.closeHooks(),
+		)
 	}
 	b.programs = []*CiliumEBPF.Program{createProgram, releaseProgram}
 	b.links = []cgroupProgramLink{createLink, releaseLink}
@@ -164,25 +175,20 @@ func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroup
 	hooks := selfBypassSocketAddrHooks(config)
 	programs := make([]*CiliumEBPF.Program, 0, len(hooks))
 	links := make([]cgroupProgramLink, 0, len(hooks))
-	closeAttached := func() {
-		for index := len(links) - 1; index >= 0; index-- {
-			_ = links[index].Close()
-		}
-		for index := len(programs) - 1; index >= 0; index-- {
-			_ = programs[index].Close()
-		}
+	closeAttached := func() error {
+		b.programs = programs
+		b.links = links
+		return b.closeHooks()
 	}
 	for _, hook := range hooks {
 		program, err := newSelfBypassSocketAddrProgram(b.sockets.FD(), hook)
 		if err != nil {
-			closeAttached()
-			return err
+			return E.Errors(err, closeAttached())
 		}
 		programs = append(programs, program)
 		programLink, err := attachCgroupProgram(path, program, hook.attachType)
 		if err != nil {
-			closeAttached()
-			return E.Cause(err, "attach eBPF self-bypass ", hook.name, " hook")
+			return E.Errors(E.Cause(err, "attach eBPF self-bypass ", hook.name, " hook"), closeAttached())
 		}
 		links = append(links, programLink)
 	}
@@ -435,11 +441,20 @@ func (b *SelfBypass) closeHooks() error {
 		return nil
 	}
 	var closeErr error
+	linksClosed := true
 	for index := len(b.links) - 1; index >= 0; index-- {
 		if b.links[index] != nil {
-			closeErr = E.Errors(closeErr, b.links[index].Close())
-			b.links[index] = nil
+			linkErr := b.links[index].Close()
+			closeErr = E.Errors(closeErr, linkErr)
+			if cgroupProgramLinkCloseComplete(b.links[index], linkErr) {
+				b.links[index] = nil
+			} else {
+				linksClosed = false
+			}
 		}
+	}
+	if !linksClosed {
+		return closeErr
 	}
 	for index := len(b.programs) - 1; index >= 0; index-- {
 		if b.programs[index] != nil {
@@ -447,6 +462,8 @@ func (b *SelfBypass) closeHooks() error {
 			b.programs[index] = nil
 		}
 	}
+	b.links = nil
+	b.programs = nil
 	b.mode.Store(uint32(SelfBypassUserspace))
 	return closeErr
 }
@@ -458,9 +475,21 @@ func (b *SelfBypass) Close() error {
 	b.access.Lock()
 	defer b.access.Unlock()
 	closeErr := b.closeHooks()
+	if lenOpenCgroupProgramLinks(b.links) > 0 {
+		return closeErr
+	}
 	if b.sockets != nil {
 		closeErr = E.Errors(closeErr, b.sockets.Close())
 		b.sockets = nil
 	}
 	return closeErr
+}
+
+func (b *SelfBypass) IsClosed() bool {
+	if b == nil {
+		return true
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	return b.sockets == nil && lenOpenCgroupProgramLinks(b.links) == 0
 }

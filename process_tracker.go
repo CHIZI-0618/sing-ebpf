@@ -4,6 +4,7 @@ package singebpf
 
 import (
 	"slices"
+	"sync"
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
@@ -39,6 +40,7 @@ type processTrackerHook struct {
 // socket. Socket cookies let the TC data path carry that identity to userspace
 // without searching every process file descriptor under procfs.
 type ProcessTracker struct {
+	access              sync.RWMutex
 	owners              *CiliumEBPF.Map
 	policyUID           *CiliumEBPF.Map
 	metadata            *CiliumEBPF.Map
@@ -106,27 +108,31 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 		tracker.policyUID = uidPolicy
 		tracker.policyDefaultBypass = defaultBypass
 	}
-	complete := false
-	defer func() {
-		if !complete {
-			_ = tracker.Close()
-		}
-	}()
 	for _, hook := range processTrackerHooks(config) {
 		program, loadErr := newProcessTrackerProgram(hook, owners.FD(), tracker.policyUIDFD(), tracker.metadataFD(), tracker.policyDefaultBypass)
 		if loadErr != nil {
-			return nil, loadErr
+			return rollbackProcessTracker(tracker, loadErr)
 		}
 		tracker.programs = append(tracker.programs, program)
 		programLink, attachErr := attachCgroupProgram(cgroupPath, program, hook.attachType)
 		if attachErr != nil {
-			return nil, E.Cause(attachErr, "attach eBPF process tracker ", hook.name, " hook")
+			return rollbackProcessTracker(tracker, E.Cause(attachErr, "attach eBPF process tracker ", hook.name, " hook"))
 		}
 		tracker.links = append(tracker.links, programLink)
 	}
 	tracker.attachReleaseCleanup(cgroupPath)
-	complete = true
 	return tracker, nil
+}
+
+// rollbackProcessTracker returns the tracker together with the startup error
+// only when a legacy attachment could not be detached. The caller then owns
+// that incomplete tracker and must retain it until Close succeeds.
+func rollbackProcessTracker(tracker *ProcessTracker, startupErr error) (*ProcessTracker, error) {
+	closeErr := tracker.Close()
+	if closeErr != nil && !tracker.IsClosed() {
+		return tracker, E.Errors(startupErr, E.Cause(closeErr, "rollback eBPF process tracker"))
+	}
+	return nil, E.Errors(startupErr, closeErr)
 }
 
 // attachReleaseCleanup removes process ownership as soon as the socket dies.
@@ -302,7 +308,12 @@ func (t *ProcessTracker) metadataFD() int {
 }
 
 func (t *ProcessTracker) LookupOwner(socketCookie uint64) (ProcessSocketOwner, error) {
-	if t == nil || t.owners == nil || socketCookie == 0 {
+	if t == nil || socketCookie == 0 {
+		return ProcessSocketOwner{}, E.New("invalid eBPF process owner lookup")
+	}
+	t.access.RLock()
+	defer t.access.RUnlock()
+	if t.owners == nil {
 		return ProcessSocketOwner{}, E.New("invalid eBPF process owner lookup")
 	}
 	var owner ProcessSocketOwner
@@ -316,13 +327,24 @@ func (t *ProcessTracker) Close() error {
 	if t == nil {
 		return nil
 	}
+	t.access.Lock()
+	defer t.access.Unlock()
 	var closeErr error
+	linksClosed := true
 	for index, programLink := range slices.Backward(t.links) {
 		if programLink == nil {
 			continue
 		}
-		closeErr = E.Errors(closeErr, programLink.Close())
-		t.links[index] = nil
+		linkErr := programLink.Close()
+		closeErr = E.Errors(closeErr, linkErr)
+		if cgroupProgramLinkCloseComplete(programLink, linkErr) {
+			t.links[index] = nil
+		} else {
+			linksClosed = false
+		}
+	}
+	if !linksClosed {
+		return closeErr
 	}
 	for index, program := range slices.Backward(t.programs) {
 		if program == nil {
@@ -340,4 +362,23 @@ func (t *ProcessTracker) Close() error {
 		t.policyUID = nil
 	}
 	return closeErr
+}
+
+func (t *ProcessTracker) IsClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.access.RLock()
+	defer t.access.RUnlock()
+	return t.owners == nil && t.policyUID == nil && lenOpenCgroupProgramLinks(t.links) == 0
+}
+
+func lenOpenCgroupProgramLinks(links []cgroupProgramLink) int {
+	var count int
+	for _, programLink := range links {
+		if programLink != nil {
+			count++
+		}
+	}
+	return count
 }
