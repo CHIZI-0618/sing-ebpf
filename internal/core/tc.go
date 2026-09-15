@@ -764,6 +764,9 @@ func (b *TCBackend) SharedIngressProgram(framing TCLinkFraming) *CiliumEBPF.Prog
 func (b *TCBackend) DeliveryIngressProgramFD() int { return b.programFD(tcProgramDeliveryIngress) }
 
 func (b *TCBackend) programFD(index int) int {
+	if b == nil {
+		return -1
+	}
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || index < 0 || index >= len(b.runtime.programs) || b.runtime.programs[index] == nil {
@@ -773,6 +776,9 @@ func (b *TCBackend) programFD(index int) int {
 }
 
 func (b *TCBackend) program(index int) *CiliumEBPF.Program {
+	if b == nil {
+		return nil
+	}
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || index < 0 || index >= len(b.runtime.programs) {
