@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/cilium/ebpf v0.22.1-0.20260910105759-60e81073fdc6
 	github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf
-	github.com/sagernet/sing v0.9.4-0.20260912053229-7776850263cd
+	github.com/sagernet/sing v0.9.5-0.20260914135810-80bfa92a0607
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0

@@ -20,8 +20,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf h1:b/3rm+KvxzuYRcnMdLq/hmcqX6/2B8k24l6SDHL2Piw=
 github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf/go.mod h1:xLnfdiJbSp8rNqYEdIW/6eDO4mVoogml14Bh2hSiFpM=
-github.com/sagernet/sing v0.9.4-0.20260912053229-7776850263cd h1:awZQVpsmNdo/EZgEW1nwj9sMQbtgfD130oFIH/7fIDM=
-github.com/sagernet/sing v0.9.4-0.20260912053229-7776850263cd/go.mod h1:K3Owt3xPhHugvlnlPPxZJ/exXdaJfEPOTNorGk4AXjo=
+github.com/sagernet/sing v0.9.5-0.20260914135810-80bfa92a0607 h1:YzA14QltKgRqFKEZYRP1JBL2meuf3Mx3DiDK/U5+/PA=
+github.com/sagernet/sing v0.9.5-0.20260914135810-80bfa92a0607/go.mod h1:K3Owt3xPhHugvlnlPPxZJ/exXdaJfEPOTNorGk4AXjo=
 github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 h1:gga7acRE695APm9hlsSMoOoE65U4/TcqNj90mc69Rlg=
 github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74/go.mod h1:DD4vA1DwXk04H54A1oHXtwZmA0grkVMdPxx/VGLCah0=
 go4.org/netipx v0.0.0-20231129151722-fdeea329fbba h1:0b9z3AuHCjxk0x/opv64kcgZLBseWJUpBw5I82+2U4M=
