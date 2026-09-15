@@ -1,0 +1,64 @@
+name: Verify sing-ebpf
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Go, generated objects, and Linux kernel
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.5
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+
+      - name: Verify generated eBPF objects
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+          make check
+          go clean -cache
+
+      - name: Test and vet
+        run: |
+          go test -tags with_ebpf ./...
+          go test -race -tags with_ebpf ./...
+          go vet -tags with_ebpf ./...
+
+      - name: Run real-kernel tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env \
+            "PATH=$PATH" \
+            SING_EBPF_INTEGRATION=1 \
+            SING_EBPF_REQUIRE_TCX=1 \
+            go test -v -count=1 -race \
+              -tags with_ebpf,ebpf_integration \
+              ./... 2>&1 | tee verifier.log
+
+      - name: Upload verifier log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sing-ebpf-verifier
+          path: verifier.log
+          if-no-files-found: warn
+          retention-days: 14
