@@ -1,0 +1,110 @@
+//go:build with_ebpf && (linux || android)
+
+package core
+
+import "reflect"
+
+// The handle types deliberately expose no exported accessors. Public facade
+// types embed them, which promotes these package-private methods into their
+// method sets. Code inside this internal package can therefore unwrap a facade
+// without placing raw maps, programs, or file descriptors on the public API.
+
+type SelfBypassHandle struct {
+	backend *SelfBypass
+}
+
+func NewSelfBypassHandle(backend *SelfBypass) SelfBypassHandle {
+	return SelfBypassHandle{backend: backend}
+}
+
+func (h SelfBypassHandle) selfBypassBackend() *SelfBypass {
+	return h.backend
+}
+
+func UnwrapSelfBypass(value any) *SelfBypass {
+	if nilFacade(value) {
+		return nil
+	}
+	carrier, loaded := value.(interface{ selfBypassBackend() *SelfBypass })
+	if !loaded {
+		panic("invalid sing-ebpf self-bypass facade")
+	}
+	return carrier.selfBypassBackend()
+}
+
+func PrepareCgroupWithSelfBypass(config CgroupConfig, value any) (*CgroupBackend, error) {
+	if bypass := UnwrapSelfBypass(value); bypass != nil {
+		config.SelfBypassMap = bypass.Map()
+	}
+	return PrepareCgroup(config)
+}
+
+func AttachProcessTrackerWithSelfBypass(config ProcessTrackerConfig, value any) (*ProcessTracker, error) {
+	if bypass := UnwrapSelfBypass(value); bypass != nil {
+		config.MetadataMap = bypass.Map()
+	}
+	return AttachProcessTracker(config)
+}
+
+func PrepareTCWithSelfBypass(config TCConfig, value any) (*TCBackend, error) {
+	if bypass := UnwrapSelfBypass(value); bypass != nil {
+		config.SelfBypassMap = bypass.Map()
+	}
+	return PrepareTC(config)
+}
+
+type TCBackendHandle struct {
+	backend *TCBackend
+}
+
+func NewTCBackendHandle(backend *TCBackend) TCBackendHandle {
+	return TCBackendHandle{backend: backend}
+}
+
+func (h TCBackendHandle) tcBackend() *TCBackend {
+	return h.backend
+}
+
+func UnwrapTCBackend(value any) *TCBackend {
+	if nilFacade(value) {
+		return nil
+	}
+	carrier, loaded := value.(interface{ tcBackend() *TCBackend })
+	if !loaded {
+		panic("invalid sing-ebpf TC backend facade")
+	}
+	return carrier.tcBackend()
+}
+
+type SharedPacketRewriteBackendHandle struct {
+	backend *SharedPacketRewriteBackend
+}
+
+func NewSharedPacketRewriteBackendHandle(backend *SharedPacketRewriteBackend) SharedPacketRewriteBackendHandle {
+	return SharedPacketRewriteBackendHandle{backend: backend}
+}
+
+func (h SharedPacketRewriteBackendHandle) sharedNetworkBackend() *SharedPacketRewriteBackend {
+	return h.backend
+}
+
+func UnwrapSharedPacketRewriteBackend(value any) *SharedPacketRewriteBackend {
+	if nilFacade(value) {
+		return nil
+	}
+	carrier, loaded := value.(interface {
+		sharedNetworkBackend() *SharedPacketRewriteBackend
+	})
+	if !loaded {
+		panic("invalid sing-ebpf shared-network backend facade")
+	}
+	return carrier.sharedNetworkBackend()
+}
+
+func nilFacade(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
+}
