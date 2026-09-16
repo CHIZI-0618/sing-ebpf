@@ -185,7 +185,7 @@ func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 	}
 	if err = attachProgramRaw(cgroupFD, program, CiliumEBPF.AttachCgroupInetSockRelease); err != nil {
 		closeErr := program.Close()
-		if socketReleaseUnavailable(err) {
+		if socketReleaseAttachUnavailable(err) {
 			return false, closeErr
 		}
 		return false, E.Errors(err, closeErr)
@@ -204,4 +204,8 @@ func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 func socketReleaseUnavailable(err error) bool {
 	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTSUP) ||
 		errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, linuxErrnoNotSupported)
+}
+
+func socketReleaseAttachUnavailable(err error) bool {
+	return socketReleaseUnavailable(err) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES)
 }
