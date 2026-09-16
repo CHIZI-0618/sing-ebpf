@@ -40,6 +40,7 @@ type kernelProbeJSONReport struct {
 	ActiveStateError string                   `json:"active_state_error,omitempty"`
 	Preflight        bool                     `json:"preflight"`
 	ExactObjectLoad  bool                     `json:"exact_object_load"`
+	MapOccupancy     MapOccupancyReport       `json:"map_occupancy"`
 	Summary          kernelProbeJSONSummary   `json:"summary"`
 	Result           string                   `json:"result"`
 }
@@ -59,6 +60,7 @@ func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) err
 		ActivePrograms:  make([]kernelProbeJSONProgram, 0, len(report.ActivePrograms)),
 		Preflight:       true,
 		ExactObjectLoad: report.ExactObjectLoad,
+		MapOccupancy:    report.MapOccupancy,
 		Summary: kernelProbeJSONSummary{
 			Pass:             counts[KernelProbePass],
 			Warn:             counts[KernelProbeWarn],
@@ -73,6 +75,7 @@ func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) err
 	if report.ActiveStateErr != nil {
 		output.ActiveStateError = shortProbeError(report.ActiveStateErr)
 	}
+
 	for _, program := range report.ActivePrograms {
 		output.ActivePrograms = append(output.ActivePrograms, kernelProbeJSONProgram{
 			ID:       uint32(program.ID),
@@ -149,6 +152,31 @@ func WriteKernelProbeReport(writer io.Writer, report *KernelProbeReport) error {
 		for _, program := range report.ActivePrograms {
 			if _, err := fmt.Fprintf(writer, "  id=%d name=%s type=%s maps=%d\n",
 				program.ID, program.Name, program.Type, program.MapCount); err != nil {
+				return err
+			}
+		}
+	}
+
+	if _, err := fmt.Fprintln(writer, "\nMap occupancy (on-demand; no background scan)"); err != nil {
+		return err
+	}
+	if report.MapOccupancy.Error != "" {
+		if _, err := fmt.Fprintln(writer, "  UNKNOWN:", report.MapOccupancy.Error); err != nil {
+			return err
+		}
+	}
+	if len(report.MapOccupancy.Maps) == 0 && report.MapOccupancy.Error == "" {
+		if _, err := fmt.Fprintln(writer, "  none visible"); err != nil {
+			return err
+		}
+	}
+	for _, item := range report.MapOccupancy.Maps {
+		if item.Supported {
+			if _, err := fmt.Fprintf(writer, "  name=%s id=%d type=%s entries=%d/%d key=%d value=%d flags=0x%x\n", item.Name, item.ID, item.Type, item.Entries, item.MaxEntries, item.KeySize, item.ValueSize, item.Flags); err != nil {
+				return err
+			}
+		} else {
+			if _, err := fmt.Fprintf(writer, "  name=%s id=%d type=%s entries=UNKNOWN/%d (%s)\n", item.Name, item.ID, item.Type, item.MaxEntries, item.Error); err != nil {
 				return err
 			}
 		}
