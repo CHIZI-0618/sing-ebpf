@@ -32,15 +32,28 @@ var loadSharedNetwork = BPFGen.LoadSharedNetwork
 var loadICMPEchoReply = BPFGen.LoadICMPEchoReply
 
 func attachProgramRaw(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
-	// Never retry without BPF_F_ALLOW_MULTI. An unflagged BPF_PROG_ATTACH can
-	// replace an existing single program, including Android netd's root-cgroup
-	// hooks, and would then prevent that service from attaching again.
-	return rawAttachProgram(link.RawAttachProgramOptions{
+	options := link.RawAttachProgramOptions{
 		Target:  target,
 		Program: program,
 		Attach:  attachType,
 		Flags:   unix.BPF_F_ALLOW_MULTI,
-	})
+	}
+	multiErr := rawAttachProgram(options)
+	if multiErr == nil || !cgroupMultiAttachUnavailable(multiErr) {
+		return multiErr
+	}
+	// Keep the legacy fallback used before multi-only attachment was adopted.
+	// Some vendor kernels reject ALLOW_MULTI for otherwise usable hooks. An
+	// unflagged attach can replace an existing single-program attachment, so it
+	// is attempted only after errors known to indicate unavailable multi attach.
+	options.Flags = 0
+	return rawAttachProgram(options)
+}
+
+func cgroupMultiAttachUnavailable(err error) bool {
+	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EPERM) ||
+		errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) ||
+		errors.Is(err, linuxErrnoNotSupported)
 }
 
 func rawDetachProgram(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {

@@ -4,6 +4,7 @@ package core
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	CiliumEBPF "github.com/cilium/ebpf"
@@ -12,27 +13,94 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestRawCgroupAttachNeverFallsBackToExclusive(t *testing.T) {
+func TestRawCgroupAttachPrefersMulti(t *testing.T) {
 	originalRawAttachProgram := rawAttachProgram
 	t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })
-	wantErr := errors.New("multi-program attach rejected")
 	callCount := 0
 	var options link.RawAttachProgramOptions
 	rawAttachProgram = func(current link.RawAttachProgramOptions) error {
 		callCount++
 		options = current
-		return wantErr
+		return nil
 	}
-
 	err := attachProgramRaw(42, nil, CiliumEBPF.AttachCgroupInetSockRelease)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("attachProgramRaw error = %v, want %v", err, wantErr)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if callCount != 1 {
-		t.Fatalf("raw attach called %d times, want exactly one multi-program attempt", callCount)
+		t.Fatalf("raw attach called %d times, want one multi-program attempt", callCount)
 	}
 	if options.Target != 42 || options.Attach != CiliumEBPF.AttachCgroupInetSockRelease || options.Flags != unix.BPF_F_ALLOW_MULTI {
 		t.Fatalf("raw attach options = %+v, want target=42 attach=socket_release flags=BPF_F_ALLOW_MULTI", options)
+	}
+}
+
+func TestRawCgroupAttachFallsBackToExclusiveAfterMultiCompatibilityError(t *testing.T) {
+	originalRawAttachProgram := rawAttachProgram
+	t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })
+	var flags []uint32
+	rawAttachProgram = func(current link.RawAttachProgramOptions) error {
+		if current.Target != 42 || current.Attach != CiliumEBPF.AttachCGroupInet4Connect {
+			t.Fatalf("unexpected attach options: %+v", current)
+		}
+		flags = append(flags, current.Flags)
+		if current.Flags == unix.BPF_F_ALLOW_MULTI {
+			return unix.EPERM
+		}
+		return nil
+	}
+	if err := attachProgramRaw(42, nil, CiliumEBPF.AttachCGroupInet4Connect); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(flags, []uint32{unix.BPF_F_ALLOW_MULTI, 0}) {
+		t.Fatalf("flags=%v, want [ALLOW_MULTI, 0]", flags)
+	}
+}
+
+func TestRawCgroupAttachFallbackErrors(t *testing.T) {
+	for _, multiErr := range []error{
+		unix.EINVAL,
+		unix.EPERM,
+		unix.ENOTSUP,
+		unix.EOPNOTSUPP,
+		linuxErrnoNotSupported,
+	} {
+		t.Run(multiErr.Error(), func(t *testing.T) {
+			originalRawAttachProgram := rawAttachProgram
+			t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })
+			var flags []uint32
+			rawAttachProgram = func(current link.RawAttachProgramOptions) error {
+				flags = append(flags, current.Flags)
+				if current.Flags == unix.BPF_F_ALLOW_MULTI {
+					return multiErr
+				}
+				return nil
+			}
+			if err := attachProgramRaw(42, nil, CiliumEBPF.AttachCGroupInet4Connect); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(flags, []uint32{unix.BPF_F_ALLOW_MULTI, 0}) {
+				t.Fatalf("flags=%v, want [ALLOW_MULTI, 0]", flags)
+			}
+		})
+	}
+}
+
+func TestRawCgroupAttachDoesNotFallbackOnFatalError(t *testing.T) {
+	originalRawAttachProgram := rawAttachProgram
+	t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })
+	wantErr := unix.EACCES
+	callCount := 0
+	rawAttachProgram = func(link.RawAttachProgramOptions) error {
+		callCount++
+		return wantErr
+	}
+	err := attachProgramRaw(42, nil, CiliumEBPF.AttachCGroupInet4Connect)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if callCount != 1 {
+		t.Fatalf("raw attach called %d times, want no exclusive fallback", callCount)
 	}
 }
 

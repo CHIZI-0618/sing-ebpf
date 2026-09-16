@@ -35,9 +35,9 @@ func cgroupProgramLinkCloseComplete(programLink cgroupProgramLink, closeErr erro
 }
 
 // attachCgroupProgram prefers BPF_LINK_CREATE, whose cgroup implementation is
-// inherently multi-program, and falls back only to BPF_PROG_ATTACH with
-// BPF_F_ALLOW_MULTI. It must never fall back to an exclusive attachment: doing
-// so can replace a system-owned cgroup program.
+// inherently multi-program, then falls back to legacy BPF_PROG_ATTACH. The
+// legacy path tries BPF_F_ALLOW_MULTI first and retries without flags only when
+// the kernel rejects multi attachment with a compatibility error.
 func attachCgroupProgram(path string, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) (cgroupProgramLink, error) {
 	cgroupFile, err := os.Open(path)
 	if err != nil {
