@@ -87,7 +87,7 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 	if plan.enableIPv6 {
 		backend.redirectIPv6 = netip.MustParsePrefix("fd00::/64")
 	}
-	if err = prepareCgroupMaps(runtimeState, DefaultCgroupMapCapacity(), 0, selfBypass.Map()); err == nil {
+	if err = prepareCgroupMaps(runtimeState, DefaultCgroupMapCapacity(), 0, 0, selfBypass.Map()); err == nil {
 		runtimeState.programs, err = backend.loadCgroupObjectPrograms()
 	}
 	detail := "Loaded the generated cgroup programs and their real map specifications without attaching cgroup hooks."
