@@ -135,6 +135,8 @@ type KernelProbeReport struct {
 	ActivePrograms  []KernelProbeProgram
 	ActiveStateErr  error
 	ExactObjectLoad bool
+	// MapOccupancy is populated only by an explicit diagnostic caller.
+	MapOccupancy MapOccupancyReport
 }
 
 func (r *KernelProbeReport) Add(
