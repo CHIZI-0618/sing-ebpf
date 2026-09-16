@@ -31,6 +31,7 @@ type (
 	SharedPacketRewriteFlowHandle  = core.SharedPacketRewriteFlowHandle
 	SharedPacketRewriteSweepResult = core.SharedPacketRewriteSweepResult
 	TCAssignment                   = core.TCAssignment
+	TCStats                        = core.TCStats
 	TCLinkFraming                  = core.TCLinkFraming
 	AttachmentInfo                 = core.AttachmentInfo
 	TCNetworkInfo                  = core.TCNetworkInfo
@@ -261,6 +262,10 @@ func (b *TCBackend) RegisterTCPListener(ipv6 bool, fd int) error {
 
 func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.AddrPort, interfaceIndex uint32, remove bool) (TCAssignment, error) {
 	return core.UnwrapTCBackend(b).LookupAssignment(protocol, source, destination, interfaceIndex, remove)
+}
+
+func (b *TCBackend) Stats() (TCStats, error) {
+	return core.UnwrapTCBackend(b).Stats()
 }
 
 func (b *TCBackend) SetDeliveryInterface(interfaceIndex uint32, hardwareAddress MACAddress) error {

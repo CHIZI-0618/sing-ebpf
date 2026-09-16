@@ -28,6 +28,21 @@ const (
 	tcPortPolicyCapacity        = 4096
 )
 
+const (
+	tcStatSocketLookupFailure uint32 = iota
+	tcStatSKAssignFailure
+	tcStatAssignmentUpdateFailure
+	tcStatCount
+)
+
+// TCStats contains counters collected only on native TC error paths. Values
+// are cumulative for the lifetime of the backend and are summed across CPUs.
+type TCStats struct {
+	SocketLookupFailures     uint64
+	SKAssignFailures         uint64
+	AssignmentUpdateFailures uint64
+}
+
 // DefaultTCRoutingMark is used only by standalone backend tests and callers
 // that do not install policy routing. The TC data plane selects a free mark
 // before enabling the backend.
@@ -193,6 +208,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_control":             {name: "sb_tc_ctl", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"tc_listener_sockets":    {name: "sb_tc_listen", mapType: CiliumEBPF.SockMap, maxEntries: 2},
 		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.LRUHash, maxEntries: config.AssignmentCapacity},
+		"tc_stats":               {name: "sb_tc_stats", mapType: CiliumEBPF.PerCPUArray, maxEntries: tcStatCount},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
 		"tc_bypass_ipv4":         {name: "sb_tc_bypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"tc_bypass_ipv6":         {name: "sb_tc_bypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
@@ -570,6 +586,46 @@ func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.A
 		_ = deleteMap(b.assignmentMapFD, unsafe.Pointer(&key))
 	}
 	return assignment, nil
+}
+
+// Stats reads the native TC error counters on demand. It performs one map
+// lookup per counter and never runs from a background worker or timer.
+func (b *TCBackend) Stats() (TCStats, error) {
+	if b == nil {
+		return TCStats{}, errBackendClosed
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil {
+		return TCStats{}, errBackendClosed
+	}
+	statsMap := b.runtime.maps["tc_stats"]
+	if statsMap == nil {
+		return TCStats{}, errBackendClosed
+	}
+	read := func(index uint32) (uint64, error) {
+		var perCPU []uint64
+		if err := statsMap.Lookup(&index, &perCPU); err != nil {
+			return 0, err
+		}
+		var total uint64
+		for _, value := range perCPU {
+			total += value
+		}
+		return total, nil
+	}
+	var stats TCStats
+	var err error
+	if stats.SocketLookupFailures, err = read(tcStatSocketLookupFailure); err != nil {
+		return TCStats{}, err
+	}
+	if stats.SKAssignFailures, err = read(tcStatSKAssignFailure); err != nil {
+		return TCStats{}, err
+	}
+	if stats.AssignmentUpdateFailures, err = read(tcStatAssignmentUpdateFailure); err != nil {
+		return TCStats{}, err
+	}
+	return stats, nil
 }
 
 func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
