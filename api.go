@@ -47,6 +47,8 @@ type (
 	KernelProbeFinding             = core.KernelProbeFinding
 	KernelProbeProgram             = core.KernelProbeProgram
 	KernelProbeReport              = core.KernelProbeReport
+	MapOccupancy                   = core.MapOccupancy
+	MapOccupancyReport             = core.MapOccupancyReport
 )
 
 const (
@@ -61,17 +63,18 @@ const (
 	DNSModeRespectPolicy = core.DNSModeRespectPolicy
 	DNSModeOff           = core.DNSModeOff
 
-	TCPRedirectMapCapacity            = core.TCPRedirectMapCapacity
-	UDPRedirectMapCapacity            = core.UDPRedirectMapCapacity
-	UDPPeerMapCapacity                = core.UDPPeerMapCapacity
-	UDPFlowMapCapacity                = core.UDPFlowMapCapacity
-	SocketBypassMapCapacity           = core.SocketBypassMapCapacity
-	SharedPacketRewriteProxyCapacity  = core.SharedPacketRewriteProxyCapacity
-	SharedPacketRewriteBypassCapacity = core.SharedPacketRewriteBypassCapacity
-	UDPRecoveryMapCapacity            = core.UDPRecoveryMapCapacity
-	CompactSelfBypassSocketCapacity   = core.CompactSelfBypassSocketCapacity
-	CompactTCAssignmentCapacity       = core.CompactTCAssignmentCapacity
-	MaxConfigurableMapCapacity        = core.MaxConfigurableMapCapacity
+	TCPRedirectMapCapacity                   = core.TCPRedirectMapCapacity
+	UDPRedirectMapCapacity                   = core.UDPRedirectMapCapacity
+	UDPPeerMapCapacity                       = core.UDPPeerMapCapacity
+	UDPFlowMapCapacity                       = core.UDPFlowMapCapacity
+	SocketBypassMapCapacity                  = core.SocketBypassMapCapacity
+	SharedPacketRewriteProxyCapacity         = core.SharedPacketRewriteProxyCapacity
+	SharedPacketRewriteBypassCapacity        = core.SharedPacketRewriteBypassCapacity
+	CompactSharedPacketRewriteBypassCapacity = core.CompactSharedPacketRewriteBypassCapacity
+	UDPRecoveryMapCapacity                   = core.UDPRecoveryMapCapacity
+	CompactSelfBypassSocketCapacity          = core.CompactSelfBypassSocketCapacity
+	CompactTCAssignmentCapacity              = core.CompactTCAssignmentCapacity
+	MaxConfigurableMapCapacity               = core.MaxConfigurableMapCapacity
 
 	DefaultTCRoutingMark = core.DefaultTCRoutingMark
 	TCPathShared         = core.TCPathShared
@@ -437,6 +440,16 @@ func CompileBypassCIDRPolicy(prefixes []netip.Prefix) (BypassCIDRPolicy, error) 
 
 func DefaultCgroupMapCapacity() CgroupMapCapacity {
 	return core.DefaultCgroupMapCapacity()
+}
+
+func CompactSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {
+	return core.CompactSharedPacketRewriteMapCapacity()
+}
+
+// InspectMapOccupancy performs a one-shot inspection of maps owned by
+// sing-ebpf. It does not start a background scan or affect active datapaths.
+func InspectMapOccupancy() MapOccupancyReport {
+	return core.InspectMapOccupancy()
 }
 
 func CompactCgroupMapCapacity() CgroupMapCapacity {

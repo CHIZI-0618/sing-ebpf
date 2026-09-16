@@ -14,23 +14,24 @@ import (
 )
 
 const (
-	TCPRedirectMapCapacity              = 32768
-	UDPRedirectMapCapacity              = 32768
-	UDPPeerMapCapacity                  = 16384
-	UDPFlowMapCapacity                  = 16384
-	SocketBypassMapCapacity             = 32768
-	SharedPacketRewriteProxyCapacity    = 32768
-	SharedPacketRewriteBypassCapacity   = 16384
-	UDPRecoveryMapCapacity              = 8192
-	CompactTCPRedirectMapCapacity       = 8192
-	CompactUDPRedirectMapCapacity       = 8192
-	CompactUDPPeerMapCapacity           = 4096
-	CompactUDPFlowMapCapacity           = 8192
-	CompactSocketBypassMapCapacity      = 16384
-	MaxConfigurableMapCapacity          = 1 << 20
-	originalDestinationFlagConnectedUDP = 1
-	udpFlowActionProxy                  = 1
-	udpFlowActionBypass                 = 2
+	TCPRedirectMapCapacity                   = 32768
+	UDPRedirectMapCapacity                   = 32768
+	UDPPeerMapCapacity                       = 16384
+	UDPFlowMapCapacity                       = 16384
+	SocketBypassMapCapacity                  = 32768
+	SharedPacketRewriteProxyCapacity         = 32768
+	SharedPacketRewriteBypassCapacity        = 16384
+	CompactSharedPacketRewriteBypassCapacity = 8192
+	UDPRecoveryMapCapacity                   = 8192
+	CompactTCPRedirectMapCapacity            = 8192
+	CompactUDPRedirectMapCapacity            = 8192
+	CompactUDPPeerMapCapacity                = 4096
+	CompactUDPFlowMapCapacity                = 8192
+	CompactSocketBypassMapCapacity           = 8192
+	MaxConfigurableMapCapacity               = 1 << 20
+	originalDestinationFlagConnectedUDP      = 1
+	udpFlowActionProxy                       = 1
+	udpFlowActionBypass                      = 2
 )
 
 const (
@@ -111,6 +112,13 @@ func DefaultSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {
 	return SharedPacketRewriteMapCapacity{
 		Proxy:  SharedPacketRewriteProxyCapacity,
 		Bypass: SharedPacketRewriteBypassCapacity,
+	}
+}
+
+func CompactSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {
+	return SharedPacketRewriteMapCapacity{
+		Proxy:  SharedPacketRewriteProxyCapacity,
+		Bypass: CompactSharedPacketRewriteBypassCapacity,
 	}
 }
 
