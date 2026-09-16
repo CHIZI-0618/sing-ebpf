@@ -5,6 +5,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -329,15 +330,71 @@ func memlockProbeResult(limit unix.Rlimit, readErr error, raiseErr error) (Kerne
 	return KernelProbeWarn, detail
 }
 
-func probeLocalCapabilities(report *KernelProbeReport, plane KernelProbeDataPlane, enableTCP bool, enableUDP bool) {
+func probeLocalCapabilities(report *KernelProbeReport, plane KernelProbeDataPlane, enableTCP bool, enableUDP bool, options KernelProbeOptions) {
 	const scope = "local"
 	protocols := selectedProtocolDetail(enableTCP, enableUDP)
 	if plane == KernelProbeDataPlaneCgroup {
+		probeCgroupEnvironment(report, options.CgroupPath)
 		report.Add(KernelProbePass, scope, KernelProbeRequired, "cgroup local program facilities",
 			protocols+" use the selected cgroup v2 socket-address hooks; cgroup path and attachment are verified during startup.")
 		return
 	}
+	probeLocalTCInterface(report, options.LocalInterface)
 	report.Add(KernelProbePass, scope, KernelProbeRequired, "TC local program facilities", protocols+" use the default-interface egress classifier and internal delivery veth; TC attachment and veth creation are verified during startup.")
+}
+
+func probeCgroupEnvironment(report *KernelProbeReport, configuredPath string) {
+	root, err := DetectCgroup2Root()
+	if err != nil {
+		report.Add(KernelProbeFail, "local", KernelProbeRequired, "cgroup v2 hierarchy", "local cgroup mode requires a visible cgroup v2 mount: "+shortProbeError(err))
+		return
+	}
+	path := configuredPath
+	if path == "" {
+		path, err = DetectProcessCgroup2Path()
+		if err != nil {
+			report.Add(KernelProbeUnknown, "local", KernelProbeRequired, "process cgroup v2 path", "cgroup v2 is mounted at "+root+", but the current process cgroup could not be resolved: "+shortProbeError(err))
+			return
+		}
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil || !info.IsDir() {
+		if statErr == nil {
+			statErr = fmt.Errorf("path is not a directory")
+		}
+		report.Add(KernelProbeFail, "local", KernelProbeRequired, "cgroup path", path+": "+shortProbeError(statErr))
+		return
+	}
+	report.Add(KernelProbePass, "local", KernelProbeRequired, "cgroup path", "Using "+path+" on the cgroup v2 hierarchy mounted at "+root+"; attach permission and exclusivity are still checked during startup.")
+}
+
+func probeLocalTCInterface(report *KernelProbeReport, interfaceName string) {
+	if interfaceName == "" {
+		report.Add(KernelProbeWarn, "local", KernelProbePerformance, "local TC interface", "No --local-interface was supplied; default-interface selection and internal delivery-veth setup remain startup-only checks.")
+		return
+	}
+	link, err := netlink.LinkByName(interfaceName)
+	if err != nil {
+		report.Add(KernelProbeWarn, "local", KernelProbePerformance, "local TC interface "+interfaceName, "The interface is absent: "+shortProbeError(err))
+		return
+	}
+	if link.Attrs() == nil || link.Attrs().Flags&net.FlagUp == 0 {
+		report.Add(KernelProbeWarn, "local", KernelProbePerformance, "local TC interface "+interfaceName, "The interface exists but is not administratively up.")
+	} else {
+		report.Add(KernelProbePass, "local", KernelProbePerformance, "local TC interface "+interfaceName, "The interface exists and is administratively up.")
+	}
+	qdiscs, err := netlink.QdiscList(link)
+	if err != nil {
+		report.Add(KernelProbeUnknown, "local", KernelProbePerformance, "local TC clsact qdisc "+interfaceName, "Could not inspect qdiscs: "+shortProbeError(err))
+		return
+	}
+	for _, qdisc := range qdiscs {
+		if qdisc.Type() == "clsact" {
+			report.Add(KernelProbePass, "local", KernelProbePerformance, "local TC clsact qdisc "+interfaceName, "A clsact qdisc is already visible; inspection was read-only and startup still owns collision handling.")
+			return
+		}
+	}
+	report.Add(KernelProbeWarn, "local", KernelProbePerformance, "local TC clsact qdisc "+interfaceName, "No clsact qdisc is currently visible; startup may create it.")
 }
 
 func probeSharedCapabilities(report *KernelProbeReport, plane KernelProbeDataPlane, interfaceNames []string) {
@@ -540,6 +597,7 @@ func probeActivePrograms() ([]KernelProbeProgram, error) {
 			Name:     info.Name,
 			Type:     info.Type,
 			MapCount: len(mapIDs),
+			MapIDs:   mapIDs,
 		})
 	}
 }
