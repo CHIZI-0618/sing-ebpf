@@ -36,6 +36,7 @@ func (b *CgroupBackend) ResetNetworkState() error {
 		{"cgroup_udp_token", purgeCgroupMap[uint64, listenerLookupKey]},
 		{"cgroup_udp_peer", purgeCgroupMap[udpPeerKey, udpPeerValue]},
 		{"cgroup_udp_flow", purgeCgroupMap[udpFlowKey, udpFlowValue]},
+		{"cgroup_udp_release_watch", purgeCgroupMap[uint64, uint8]},
 	}
 	for _, entry := range maps {
 		if err := entry.fn(b.runtime.maps[entry.name]); err != nil {

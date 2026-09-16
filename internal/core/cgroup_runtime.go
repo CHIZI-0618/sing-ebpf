@@ -2,6 +2,21 @@
 
 package core
 
+import (
+	"encoding/binary"
+	"errors"
+	"os"
+
+	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
+)
+
+const (
+	cgroupUDPReleaseRingSize            = 64 * 1024
+	cgroupUDPUserspaceCleanupDeadline   = "deadline"
+	cgroupUDPUserspaceCleanupRingBuffer = "ringbuf"
+)
+
 func (b *CgroupBackend) CgroupPath() string {
 	if b == nil {
 		return ""
@@ -46,6 +61,51 @@ func (b *CgroupBackend) UDPStorageMode() string {
 		return "socket_storage"
 	}
 	return "lru"
+}
+
+func (b *CgroupBackend) UDPUserspaceCleanupMode() string {
+	if b == nil {
+		return cgroupUDPUserspaceCleanupDeadline
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime != nil && b.runtime.enable_udp && b.runtime.udp_release_observer &&
+		b.runtime.udp_release_reader != nil {
+		return cgroupUDPUserspaceCleanupRingBuffer
+	}
+	return cgroupUDPUserspaceCleanupDeadline
+}
+
+// ReadUDPRelease blocks until the cgroup socket-release hook reports a socket
+// cookie that entered the local UDP data path. The notification is optional:
+// callers must retain their normal UDP deadline for unsupported kernels and
+// ring-buffer overflow.
+func (b *CgroupBackend) ReadUDPRelease() (uint64, error) {
+	if b == nil {
+		return 0, unix.EOPNOTSUPP
+	}
+	b.access.RLock()
+	runtimeState := b.runtime
+	if runtimeState == nil || !runtimeState.udp_release_observer || runtimeState.udp_release_reader == nil {
+		b.access.RUnlock()
+		return 0, unix.EOPNOTSUPP
+	}
+	reader := runtimeState.udp_release_reader
+	b.access.RUnlock()
+
+	b.udpReleaseReadAccess.Lock()
+	defer b.udpReleaseReadAccess.Unlock()
+	if err := reader.ReadInto(&runtimeState.udp_release_record); err != nil {
+		if errors.Is(err, ringbuf.ErrClosed) {
+			return 0, os.ErrClosed
+		}
+		return 0, err
+	}
+	sample := runtimeState.udp_release_record.RawSample
+	if len(sample) != 8 {
+		return 0, unix.EPROTO
+	}
+	return binary.NativeEndian.Uint64(sample), nil
 }
 
 func cgroupUDPCleanupModeLocked(runtimeState *cgroupRuntime) string {

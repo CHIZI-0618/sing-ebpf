@@ -47,6 +47,7 @@ const (
 	cgroupFlagForceInterceptIPv4
 	cgroupFlagForceInterceptIPv6
 	cgroupFlagBypassPort
+	cgroupFlagUDPReleaseNotify
 )
 
 type cgroupControl struct {

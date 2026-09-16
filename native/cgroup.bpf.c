@@ -46,6 +46,11 @@ MAP(cgroup_bypass_ipv4, struct sb_ebpf_ipv4_cidr_lpm_key, __u8, BPF_MAP_TYPE_LPM
 MAP(cgroup_bypass_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE);
 MAP(cgroup_host_ipv4, struct sb_ebpf_ipv4_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_host_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
+MAP(cgroup_udp_release_watch, __u64, __u8, BPF_MAP_TYPE_HASH);
+struct bpf_map_def SEC("maps") cgroup_udp_release_events = {
+    .type = BPF_MAP_TYPE_RINGBUF,
+    .max_entries = 65536U,
+};
 #ifdef SB_EBPF_USE_SK_STORAGE
 struct sb_ebpf_udp_socket_flow {
     __u8 family;
@@ -71,6 +76,8 @@ static long (*map_delete)(void *map, const void *key) = (void *)BPF_FUNC_map_del
 static __u64 (*get_socket_cookie)(void *ctx) = (void *)BPF_FUNC_get_socket_cookie;
 static __u64 (*get_current_uid_gid)(void) = (void *)BPF_FUNC_get_current_uid_gid;
 static __u64 (*ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
+static long (*ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
+    (void *)BPF_FUNC_ringbuf_output;
 #ifdef SB_EBPF_USE_SK_STORAGE
 static void *(*sk_storage_get)(void *map, void *socket, void *value, __u64 flags) =
     (void *)BPF_FUNC_sk_storage_get;
@@ -440,6 +447,19 @@ INLINE void flow_store(
     map_update(&cgroup_udp_flow, &key, &value, 0U);
 }
 
+INLINE void watch_udp_release(
+    const struct sb_ebpf_cgroup_control *config,
+    __u64 cookie) {
+    if (cookie == 0U ||
+        (config->flags & SB_EBPF_CGROUP_FLAG_UDP_RELEASE_NOTIFY) == 0U) return;
+    if (map_lookup(&cgroup_udp_release_watch, &cookie) != 0) return;
+    __u8 value = 1U;
+    // The first intercepted datagram is enough. The no-exist flag also closes
+    // a race between concurrent sends; userspace's UDP deadline remains the
+    // fallback if this optional notification map is full.
+    (void)map_update(&cgroup_udp_release_watch, &cookie, &value, BPF_NOEXIST);
+}
+
 INLINE bool restore_connected_token(
     struct bpf_sock_addr *ctx,
     __u64 cookie,
@@ -622,6 +642,7 @@ INLINE int handle_v4(
         flow_store(config, AF_INET_VALUE, protocol, port, flow_address,
             cookie, SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
+    if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
     if (connected_udp) socket_flow_store(ctx, AF_INET_VALUE, protocol, port, flow_address,
         SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
@@ -726,6 +747,7 @@ INLINE int handle_v6(
             flow_store(config, AF_INET_VALUE, protocol, port, flow_address, cookie,
                 SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
         }
+        if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
         if (connected_udp) socket_flow_store(ctx, AF_INET_VALUE, protocol, port, flow_address,
             SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
@@ -798,6 +820,7 @@ INLINE int handle_v6(
         flow_store(config, AF_INET6_VALUE, protocol, port, flow_address, cookie,
             SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
+    if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
     if (connected_udp) socket_flow_store(ctx, AF_INET6_VALUE, protocol, port, flow_address,
         SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
@@ -884,8 +907,7 @@ SEC("cgroup/recvmsg4") int sb_ebpf_urcv4_c(struct bpf_sock_addr *ctx) { return r
 SEC("cgroup/recvmsg6") int sb_ebpf_urcv6_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, true); }
 SEC("cgroup/recvmsg6_mapped") int sb_ebpf_urcv6_mapped_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, false); }
 
-INLINE int release_socket(struct bpf_sock *ctx) {
-    __u64 cookie = get_socket_cookie(ctx);
+INLINE int release_socket_cookie(__u64 cookie) {
     if (cookie == 0U) return 1;
     struct sb_ebpf_listener_key *listener = map_lookup(&cgroup_udp_token, &cookie);
     if (listener != 0) {
@@ -899,6 +921,24 @@ INLINE int release_socket(struct bpf_sock *ctx) {
     return 1;
 }
 
+INLINE int release_socket(struct bpf_sock *ctx) {
+    return release_socket_cookie(get_socket_cookie(ctx));
+}
+
+INLINE int release_socket_notify(struct bpf_sock *ctx) {
+    __u64 cookie = get_socket_cookie(ctx);
+    if (cookie == 0U) return 1;
+    __u8 *watched = map_lookup(&cgroup_udp_release_watch, &cookie);
+    if (watched != 0) {
+        map_delete(&cgroup_udp_release_watch, &cookie);
+        // Notification is best-effort. A full ring only postpones userspace
+        // cleanup until the ordinary UDP deadline.
+        (void)ringbuf_output(&cgroup_udp_release_events, &cookie, sizeof(cookie), 0U);
+    }
+    return release_socket_cookie(cookie);
+}
+
 SEC("cgroup/sock_release_cookie") int sb_ebpf_rel_cookie(struct bpf_sock *ctx) { return release_socket(ctx); }
+SEC("cgroup/sock_release_notify") int sb_ebpf_rel_notify(struct bpf_sock *ctx) { return release_socket_notify(ctx); }
 
 char _license[] SEC("license") = "GPL";
