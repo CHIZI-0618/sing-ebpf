@@ -227,7 +227,7 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		coarse_time_supported:    coarseTimeSupported,
 		socket_storage_supported: socketStorageSupported,
 	}
-	if err = prepareCgroupMaps(runtimeState, mapCapacity, len(uidPolicyEntries), config.SelfBypassMap); err != nil {
+	if err = prepareCgroupMaps(runtimeState, mapCapacity, len(uidPolicyEntries), len(policy.localBypassPortEntries), config.SelfBypassMap); err != nil {
 		_ = closeMaps(runtimeState.maps)
 		_ = runtimeState.cgroupFile.Close()
 		if memlockErr != nil && (errors.Is(err, unix.ENOMEM) || errors.Is(err, unix.EPERM)) {

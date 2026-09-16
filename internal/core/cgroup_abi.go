@@ -22,6 +22,11 @@ const (
 	SharedPacketRewriteProxyCapacity    = 32768
 	SharedPacketRewriteBypassCapacity   = 16384
 	UDPRecoveryMapCapacity              = 8192
+	CompactTCPRedirectMapCapacity       = 8192
+	CompactUDPRedirectMapCapacity       = 8192
+	CompactUDPPeerMapCapacity           = 4096
+	CompactUDPFlowMapCapacity           = 8192
+	CompactSocketBypassMapCapacity      = 16384
 	MaxConfigurableMapCapacity          = 1 << 20
 	originalDestinationFlagConnectedUDP = 1
 	udpFlowActionProxy                  = 1
@@ -129,6 +134,16 @@ func DefaultCgroupMapCapacity() CgroupMapCapacity {
 		UDPPeer:      UDPPeerMapCapacity,
 		UDPFlow:      UDPFlowMapCapacity,
 		SocketBypass: SocketBypassMapCapacity,
+	}
+}
+
+func CompactCgroupMapCapacity() CgroupMapCapacity {
+	return CgroupMapCapacity{
+		TCPRedirect:  CompactTCPRedirectMapCapacity,
+		UDPRedirect:  CompactUDPRedirectMapCapacity,
+		UDPPeer:      CompactUDPPeerMapCapacity,
+		UDPFlow:      CompactUDPFlowMapCapacity,
+		SocketBypass: CompactSocketBypassMapCapacity,
 	}
 }
 

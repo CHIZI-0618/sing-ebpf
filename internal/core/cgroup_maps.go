@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, uidEntries int, selfBypassMap *CiliumEBPF.Map) error {
+func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, uidEntries int, localPortEntries int, selfBypassMap *CiliumEBPF.Map) error {
 	udpLayout := cgroupUDPMapConfiguration(
 		runtimeState.enable_udp,
 		runtimeState.socket_release_supported,
@@ -42,7 +42,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		"cgroup_udp_peer":      {name: "sb_cg_peer", mapType: udpLayout.peerType, maxEntries: udpLayout.peerCapacity, flags: udpLayout.peerFlags},
 		"cgroup_udp_flow":      {name: "sb_cg_flow", mapType: CiliumEBPF.LRUHash, maxEntries: udpLayout.flowCapacity},
 		"cgroup_socket_bypass": {name: "sb_cg_sock_byp", mapType: CiliumEBPF.LRUHash, maxEntries: capacity.SocketBypass},
-		"cgroup_bypass_port":   {name: "sb_cg_bypass_port", mapType: CiliumEBPF.Hash, maxEntries: tcPortPolicyCapacity},
+		"cgroup_bypass_port":   {name: "sb_cg_bypass_port", mapType: CiliumEBPF.Hash, maxEntries: max(uint32(localPortEntries), 1), flags: bpfFlagNoPrealloc},
 		"cgroup_uid_policy":    {name: "sb_cg_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: uidCapacity, flags: bpfFlagNoPrealloc},
 		"cgroup_bypass_ipv4":   {name: "sb_cg_bypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"cgroup_bypass_ipv6":   {name: "sb_cg_bypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},

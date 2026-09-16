@@ -69,6 +69,8 @@ const (
 	SharedPacketRewriteProxyCapacity  = core.SharedPacketRewriteProxyCapacity
 	SharedPacketRewriteBypassCapacity = core.SharedPacketRewriteBypassCapacity
 	UDPRecoveryMapCapacity            = core.UDPRecoveryMapCapacity
+	CompactSelfBypassSocketCapacity   = core.CompactSelfBypassSocketCapacity
+	CompactTCAssignmentCapacity       = core.CompactTCAssignmentCapacity
 	MaxConfigurableMapCapacity        = core.MaxConfigurableMapCapacity
 
 	DefaultTCRoutingMark = core.DefaultTCRoutingMark
@@ -107,6 +109,14 @@ type SelfBypass struct {
 
 func NewSelfBypass() (*SelfBypass, error) {
 	backend, err := core.NewSelfBypass()
+	if err != nil {
+		return nil, err
+	}
+	return &SelfBypass{SelfBypassHandle: core.NewSelfBypassHandle(backend)}, nil
+}
+
+func NewSelfBypassWithCapacity(capacity uint32) (*SelfBypass, error) {
+	backend, err := core.NewSelfBypassWithCapacity(capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -191,20 +201,21 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 }
 
 type TCConfig struct {
-	ListenerPort      uint16
-	EnableLocal       bool
-	EnableShared      bool
-	EnableIPv4        bool
-	EnableLocalIPv6   bool
-	EnableSharedIPv6  bool
-	EnableTCP         bool
-	EnableUDP         bool
-	DeliveryInterface uint32
-	Policy            CompiledPolicy
-	RoutingMark       uint32
-	SelfBypass        *SelfBypass
-	TrackProcess      bool
-	ICMPEchoReply     bool
+	ListenerPort       uint16
+	EnableLocal        bool
+	EnableShared       bool
+	EnableIPv4         bool
+	EnableLocalIPv6    bool
+	EnableSharedIPv6   bool
+	EnableTCP          bool
+	EnableUDP          bool
+	DeliveryInterface  uint32
+	Policy             CompiledPolicy
+	RoutingMark        uint32
+	SelfBypass         *SelfBypass
+	TrackProcess       bool
+	ICMPEchoReply      bool
+	AssignmentCapacity uint32
 }
 
 type TCBackend struct {
@@ -213,19 +224,20 @@ type TCBackend struct {
 
 func PrepareTC(config TCConfig) (*TCBackend, error) {
 	backend, err := core.PrepareTCWithSelfBypass(core.TCConfig{
-		ListenerPort:      config.ListenerPort,
-		EnableLocal:       config.EnableLocal,
-		EnableShared:      config.EnableShared,
-		EnableIPv4:        config.EnableIPv4,
-		EnableLocalIPv6:   config.EnableLocalIPv6,
-		EnableSharedIPv6:  config.EnableSharedIPv6,
-		EnableTCP:         config.EnableTCP,
-		EnableUDP:         config.EnableUDP,
-		DeliveryInterface: config.DeliveryInterface,
-		Policy:            config.Policy,
-		RoutingMark:       config.RoutingMark,
-		TrackProcess:      config.TrackProcess,
-		ICMPEchoReply:     config.ICMPEchoReply,
+		ListenerPort:       config.ListenerPort,
+		EnableLocal:        config.EnableLocal,
+		EnableShared:       config.EnableShared,
+		EnableIPv4:         config.EnableIPv4,
+		EnableLocalIPv6:    config.EnableLocalIPv6,
+		EnableSharedIPv6:   config.EnableSharedIPv6,
+		EnableTCP:          config.EnableTCP,
+		EnableUDP:          config.EnableUDP,
+		DeliveryInterface:  config.DeliveryInterface,
+		Policy:             config.Policy,
+		RoutingMark:        config.RoutingMark,
+		TrackProcess:       config.TrackProcess,
+		ICMPEchoReply:      config.ICMPEchoReply,
+		AssignmentCapacity: config.AssignmentCapacity,
 	}, config.SelfBypass)
 	if err != nil {
 		return nil, err
@@ -425,6 +437,10 @@ func CompileBypassCIDRPolicy(prefixes []netip.Prefix) (BypassCIDRPolicy, error) 
 
 func DefaultCgroupMapCapacity() CgroupMapCapacity {
 	return core.DefaultCgroupMapCapacity()
+}
+
+func CompactCgroupMapCapacity() CgroupMapCapacity {
+	return core.CompactCgroupMapCapacity()
 }
 
 func DefaultSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {

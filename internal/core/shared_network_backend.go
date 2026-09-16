@@ -146,6 +146,7 @@ func PrepareSharedPacketRewrite(cgroupBackend *CgroupBackend, config SharedPacke
 		config.MapCapacity,
 		len(policy.includeSourceMAC),
 		len(policy.excludeSourceMAC),
+		len(policy.sharedBypassPortEntries),
 		bypassIPv4Map,
 		bypassIPv6Map,
 	)
@@ -256,6 +257,7 @@ func prepareSharedNetworkRuntime(
 	capacity SharedPacketRewriteMapCapacity,
 	includeSourceMACEntries int,
 	excludeSourceMACEntries int,
+	bypassPortEntries int,
 	bypassIPv4Map *CiliumEBPF.Map,
 	bypassIPv6Map *CiliumEBPF.Map,
 ) error {
@@ -274,7 +276,7 @@ func prepareSharedNetworkRuntime(
 		"shared_exclude_source_ipv6": {name: "sb_sh_exc6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxSharedSourceCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"shared_include_source_mac":  {name: "sb_sh_inmac", mapType: CiliumEBPF.Hash, maxEntries: sharedSourceMACMapCapacity(includeSourceMACEntries)},
 		"shared_exclude_source_mac":  {name: "sb_sh_exmac", mapType: CiliumEBPF.Hash, maxEntries: sharedSourceMACMapCapacity(excludeSourceMACEntries)},
-		"shared_bypass_port":         {name: "sb_sh_port", mapType: CiliumEBPF.Hash, maxEntries: tcPortPolicyCapacity},
+		"shared_bypass_port":         {name: "sb_sh_port", mapType: CiliumEBPF.Hash, maxEntries: max(uint32(bypassPortEntries), 1), flags: bpfFlagNoPrealloc},
 		"shared_scratch":             {name: "sb_sh_scratch", mapType: CiliumEBPF.PerCPUArray, maxEntries: 1},
 	})
 	if err != nil {

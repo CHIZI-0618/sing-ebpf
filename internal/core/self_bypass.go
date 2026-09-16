@@ -18,7 +18,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const selfBypassSocketCapacity = 65536
+const (
+	selfBypassSocketCapacity        = 65536
+	CompactSelfBypassSocketCapacity = 16384
+)
 
 // SelfBypass owns the socket-cookie map used by the local TC classifier. The
 // map is populated by cgroup hooks when the process has an exclusive cgroup,
@@ -57,13 +60,20 @@ func (m SelfBypassMode) String() string {
 }
 
 func NewSelfBypass() (*SelfBypass, error) {
+	return NewSelfBypassWithCapacity(selfBypassSocketCapacity)
+}
+
+func NewSelfBypassWithCapacity(capacity uint32) (*SelfBypass, error) {
+	if capacity == 0 || capacity > MaxConfigurableMapCapacity {
+		return nil, E.New("invalid eBPF self-bypass socket map capacity: ", capacity)
+	}
 	_ = raiseMemlockLimit()
 	sockets, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
 		Name:       "sb_self_sockets",
 		Type:       CiliumEBPF.LRUHash,
 		KeySize:    8,
 		ValueSize:  4,
-		MaxEntries: selfBypassSocketCapacity,
+		MaxEntries: capacity,
 	})
 	if err != nil {
 		return nil, E.Cause(err, "create eBPF self-bypass socket map")

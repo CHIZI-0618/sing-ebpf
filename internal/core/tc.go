@@ -23,8 +23,9 @@ const (
 )
 
 const (
-	tcAssignmentCapacity = 65536
-	tcPortPolicyCapacity = 4096
+	tcAssignmentCapacity        = 65536
+	CompactTCAssignmentCapacity = 16384
+	tcPortPolicyCapacity        = 4096
 )
 
 // DefaultTCRoutingMark is used only by standalone backend tests and callers
@@ -56,19 +57,20 @@ const (
 )
 
 type TCConfig struct {
-	ListenerPort      uint16
-	EnableLocal       bool
-	EnableShared      bool
-	EnableIPv4        bool
-	EnableLocalIPv6   bool
-	EnableSharedIPv6  bool
-	EnableTCP         bool
-	EnableUDP         bool
-	DeliveryInterface uint32
-	Policy            CompiledPolicy
-	RoutingMark       uint32
-	SelfBypassMap     *CiliumEBPF.Map
-	TrackProcess      bool
+	ListenerPort       uint16
+	EnableLocal        bool
+	EnableShared       bool
+	EnableIPv4         bool
+	EnableLocalIPv6    bool
+	EnableSharedIPv6   bool
+	EnableTCP          bool
+	EnableUDP          bool
+	DeliveryInterface  uint32
+	Policy             CompiledPolicy
+	RoutingMark        uint32
+	SelfBypassMap      *CiliumEBPF.Map
+	TrackProcess       bool
+	AssignmentCapacity uint32
 	// ICMPEchoReply loads the independent icmp_echo_reply object (see
 	// tc_icmp_echo_reply.go) and attaches it wherever this TC data plane already
 	// attaches local or shared filters. Left false, prepareTC never touches
@@ -168,6 +170,11 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 	if config.RoutingMark == 0 {
 		config.RoutingMark = DefaultTCRoutingMark
 	}
+	if config.AssignmentCapacity == 0 {
+		config.AssignmentCapacity = tcAssignmentCapacity
+	} else if config.AssignmentCapacity > MaxConfigurableMapCapacity {
+		return nil, E.New("invalid TC eBPF assignment map capacity: ", config.AssignmentCapacity)
+	}
 	policy := config.Policy
 	var err error
 	uidEntries := policy.uidEntries
@@ -185,7 +192,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 	mapOverrides := map[string]mapSpecOverride{
 		"tc_control":             {name: "sb_tc_ctl", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"tc_listener_sockets":    {name: "sb_tc_listen", mapType: CiliumEBPF.SockMap, maxEntries: 2},
-		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.LRUHash, maxEntries: tcAssignmentCapacity},
+		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.LRUHash, maxEntries: config.AssignmentCapacity},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
 		"tc_bypass_ipv4":         {name: "sb_tc_bypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"tc_bypass_ipv6":         {name: "sb_tc_bypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
@@ -195,14 +202,20 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_exclude_source_ipv6": {name: "sb_tc_exsrc6", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(excludeIPv6)), 1), flags: bpfFlagNoPrealloc},
 		"tc_include_source_mac":  {name: "sb_tc_insmac", mapType: CiliumEBPF.Hash, maxEntries: sourceMACMapCapacity(len(policy.includeSourceMAC))},
 		"tc_exclude_source_mac":  {name: "sb_tc_exsmac", mapType: CiliumEBPF.Hash, maxEntries: sourceMACMapCapacity(len(policy.excludeSourceMAC))},
-		"tc_host_ipv4":           {name: "sb_tc_host4", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries},
-		"tc_host_ipv6":           {name: "sb_tc_host6", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries},
-		"tc_local_bypass_port":   {name: "sb_tc_lport", mapType: CiliumEBPF.Hash, maxEntries: tcPortPolicyCapacity},
-		"tc_shared_bypass_port":  {name: "sb_tc_sport", mapType: CiliumEBPF.Hash, maxEntries: tcPortPolicyCapacity},
+		"tc_host_ipv4":           {name: "sb_tc_host4", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_host_ipv6":           {name: "sb_tc_host6", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_local_bypass_port":   {name: "sb_tc_lport", mapType: CiliumEBPF.Hash, maxEntries: max(uint32(len(policy.localBypassPortEntries)), 1), flags: bpfFlagNoPrealloc},
+		"tc_shared_bypass_port":  {name: "sb_tc_sport", mapType: CiliumEBPF.Hash, maxEntries: max(uint32(len(policy.sharedBypassPortEntries)), 1), flags: bpfFlagNoPrealloc},
 	}
 	if config.EnableLocal {
+		selfMapCapacity := uint32(selfBypassSocketCapacity)
+		if config.SelfBypassMap != nil {
+			// This map is replaced before programs are loaded. Avoid transiently
+			// allocating a second full-size LRU map during every backend rebuild.
+			selfMapCapacity = 1
+		}
 		mapOverrides["tc_self_sockets"] = mapSpecOverride{
-			name: "sb_self_sockets", mapType: CiliumEBPF.LRUHash, maxEntries: selfBypassSocketCapacity,
+			name: "sb_self_sockets", mapType: CiliumEBPF.LRUHash, maxEntries: selfMapCapacity,
 		}
 	}
 	legacyTCP := forceLegacyTCP || !config.EnableTCP
