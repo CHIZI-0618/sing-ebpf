@@ -97,6 +97,12 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 		loaded, err = loadObjectPrograms(loadSpec, normalMaps, normalSelections)
 	}
 	if err != nil {
+		if b.runtime.udp_release_observer {
+			if disableErr := b.disableUDPReleaseObserver(); disableErr != nil {
+				return nil, E.Errors(err, disableErr)
+			}
+			return b.loadCgroupObjectPrograms()
+		}
 		return nil, err
 	}
 	programs := make([]*CiliumEBPF.Program, cgroupProgramCount)
@@ -133,6 +139,19 @@ func (b *CgroupBackend) disableSocketStorage() {
 		delete(b.runtime.maps, "cgroup_udp_socket_storage")
 	}
 	b.runtime.socket_storage_supported = false
+}
+
+func (b *CgroupBackend) disableUDPReleaseObserver() error {
+	if b.runtime == nil || !b.runtime.udp_release_observer {
+		return nil
+	}
+	var closeErr error
+	if b.runtime.udp_release_reader != nil {
+		closeErr = b.runtime.udp_release_reader.Close()
+		b.runtime.udp_release_reader = nil
+	}
+	b.runtime.udp_release_observer = false
+	return E.Errors(closeErr, b.updateCgroupControl(b.listenerPort))
 }
 
 func coarseTimeUnavailable(err error) bool {
@@ -207,6 +226,9 @@ func (b *CgroupBackend) cgroupProgramSection(slot int) string {
 		}
 		return "cgroup/recvmsg6"
 	case cgroupProgramSocketRelease:
+		if b.runtime.udp_release_observer {
+			return "cgroup/sock_release_notify"
+		}
 		return "cgroup/sock_release_cookie"
 	default:
 		return ""
@@ -230,6 +252,9 @@ func (b *CgroupBackend) updateCgroupControl(listenerPort uint16) error {
 		ForceInterceptIPv4: b.forceInterceptIPv4.IsValid(),
 		ForceInterceptIPv6: b.forceInterceptIPv6.IsValid(),
 	}.cgroupFlags()
+	if b.runtime.udp_release_observer {
+		flags |= cgroupFlagUDPReleaseNotify
+	}
 	ipv4Prefix, ipv4HostMask := cgroupIPv4Redirect(b.redirectIPv4)
 	control := cgroupControl{
 		Flags:                flags,

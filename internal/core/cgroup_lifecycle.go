@@ -13,10 +13,15 @@ func (b *CgroupBackend) Close() error {
 	if b.runtime == nil {
 		return nil
 	}
-	if err := b.detachProgramsLocked(); err != nil {
-		return E.Cause(err, "detach eBPF cgroup programs")
+	var readerErr error
+	if b.runtime.udp_release_reader != nil {
+		readerErr = b.runtime.udp_release_reader.Close()
+		b.runtime.udp_release_reader = nil
 	}
-	closeErr := closeObjectResources(b.runtime.programs, b.runtime.maps)
+	if err := b.detachProgramsLocked(); err != nil {
+		return E.Errors(readerErr, E.Cause(err, "detach eBPF cgroup programs"))
+	}
+	closeErr := E.Errors(readerErr, closeObjectResources(b.runtime.programs, b.runtime.maps))
 	if b.runtime.cgroupFile != nil {
 		closeErr = E.Errors(closeErr, b.runtime.cgroupFile.Close())
 	}

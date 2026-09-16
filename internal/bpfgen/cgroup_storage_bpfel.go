@@ -28,6 +28,8 @@ const (
 	CgroupStorageMapCgroupUdpPeer               = "cgroup_udp_peer"
 	CgroupStorageMapCgroupUdpRecovery           = "cgroup_udp_recovery"
 	CgroupStorageMapCgroupUdpRedirect           = "cgroup_udp_redirect"
+	CgroupStorageMapCgroupUdpReleaseEvents      = "cgroup_udp_release_events"
+	CgroupStorageMapCgroupUdpReleaseWatch       = "cgroup_udp_release_watch"
 	CgroupStorageMapCgroupUdpSocketStorage      = "cgroup_udp_socket_storage"
 	CgroupStorageMapCgroupUdpToken              = "cgroup_udp_token"
 	CgroupStorageMapCgroupUidPolicy             = "cgroup_uid_policy"
@@ -41,6 +43,7 @@ const (
 	CgroupStorageProgSbEbpfConn6MappedCookieTcp = "sb_ebpf_conn6_mapped_cookie_tcp"
 	CgroupStorageProgSbEbpfConn6MappedCookieUdp = "sb_ebpf_conn6_mapped_cookie_udp"
 	CgroupStorageProgSbEbpfRelCookie            = "sb_ebpf_rel_cookie"
+	CgroupStorageProgSbEbpfRelNotify            = "sb_ebpf_rel_notify"
 	CgroupStorageProgSbEbpfUdp4Cookie           = "sb_ebpf_udp4_cookie"
 	CgroupStorageProgSbEbpfUdp6Cookie           = "sb_ebpf_udp6_cookie"
 	CgroupStorageProgSbEbpfUdp6MappedCookie     = "sb_ebpf_udp6_mapped_cookie"
@@ -101,6 +104,7 @@ type CgroupStorageProgramSpecs struct {
 	SbEbpfConn6MappedCookieTcp *ebpf.ProgramSpec `ebpf:"sb_ebpf_conn6_mapped_cookie_tcp"`
 	SbEbpfConn6MappedCookieUdp *ebpf.ProgramSpec `ebpf:"sb_ebpf_conn6_mapped_cookie_udp"`
 	SbEbpfRelCookie            *ebpf.ProgramSpec `ebpf:"sb_ebpf_rel_cookie"`
+	SbEbpfRelNotify            *ebpf.ProgramSpec `ebpf:"sb_ebpf_rel_notify"`
 	SbEbpfUdp4Cookie           *ebpf.ProgramSpec `ebpf:"sb_ebpf_udp4_cookie"`
 	SbEbpfUdp6Cookie           *ebpf.ProgramSpec `ebpf:"sb_ebpf_udp6_cookie"`
 	SbEbpfUdp6MappedCookie     *ebpf.ProgramSpec `ebpf:"sb_ebpf_udp6_mapped_cookie"`
@@ -125,6 +129,8 @@ type CgroupStorageMapSpecs struct {
 	CgroupUdpPeer          *ebpf.MapSpec `ebpf:"cgroup_udp_peer"`
 	CgroupUdpRecovery      *ebpf.MapSpec `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.MapSpec `ebpf:"cgroup_udp_redirect"`
+	CgroupUdpReleaseEvents *ebpf.MapSpec `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseWatch  *ebpf.MapSpec `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpSocketStorage *ebpf.MapSpec `ebpf:"cgroup_udp_socket_storage"`
 	CgroupUdpToken         *ebpf.MapSpec `ebpf:"cgroup_udp_token"`
 	CgroupUidPolicy        *ebpf.MapSpec `ebpf:"cgroup_uid_policy"`
@@ -168,6 +174,8 @@ type CgroupStorageMaps struct {
 	CgroupUdpPeer          *ebpf.Map `ebpf:"cgroup_udp_peer"`
 	CgroupUdpRecovery      *ebpf.Map `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.Map `ebpf:"cgroup_udp_redirect"`
+	CgroupUdpReleaseEvents *ebpf.Map `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseWatch  *ebpf.Map `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpSocketStorage *ebpf.Map `ebpf:"cgroup_udp_socket_storage"`
 	CgroupUdpToken         *ebpf.Map `ebpf:"cgroup_udp_token"`
 	CgroupUidPolicy        *ebpf.Map `ebpf:"cgroup_uid_policy"`
@@ -187,6 +195,8 @@ func (m *CgroupStorageMaps) Close() error {
 		m.CgroupUdpPeer,
 		m.CgroupUdpRecovery,
 		m.CgroupUdpRedirect,
+		m.CgroupUdpReleaseEvents,
+		m.CgroupUdpReleaseWatch,
 		m.CgroupUdpSocketStorage,
 		m.CgroupUdpToken,
 		m.CgroupUidPolicy,
@@ -213,6 +223,7 @@ type CgroupStoragePrograms struct {
 	SbEbpfConn6MappedCookieTcp *ebpf.Program `ebpf:"sb_ebpf_conn6_mapped_cookie_tcp"`
 	SbEbpfConn6MappedCookieUdp *ebpf.Program `ebpf:"sb_ebpf_conn6_mapped_cookie_udp"`
 	SbEbpfRelCookie            *ebpf.Program `ebpf:"sb_ebpf_rel_cookie"`
+	SbEbpfRelNotify            *ebpf.Program `ebpf:"sb_ebpf_rel_notify"`
 	SbEbpfUdp4Cookie           *ebpf.Program `ebpf:"sb_ebpf_udp4_cookie"`
 	SbEbpfUdp6Cookie           *ebpf.Program `ebpf:"sb_ebpf_udp6_cookie"`
 	SbEbpfUdp6MappedCookie     *ebpf.Program `ebpf:"sb_ebpf_udp6_mapped_cookie"`
@@ -233,6 +244,7 @@ func (p *CgroupStoragePrograms) Close() error {
 		p.SbEbpfConn6MappedCookieTcp,
 		p.SbEbpfConn6MappedCookieUdp,
 		p.SbEbpfRelCookie,
+		p.SbEbpfRelNotify,
 		p.SbEbpfUdp4Cookie,
 		p.SbEbpfUdp6Cookie,
 		p.SbEbpfUdp6MappedCookie,

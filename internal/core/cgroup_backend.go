@@ -15,6 +15,7 @@ import (
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
 	"golang.org/x/sys/unix"
 )
 
@@ -70,6 +71,9 @@ type cgroupRuntime struct {
 	bypass_ipv6_cidr_map_fd     int
 	host_ipv4_map_fd            int
 	host_ipv6_map_fd            int
+	udp_release_reader          *ringbuf.Reader
+	udp_release_record          ringbuf.Record
+	udp_release_observer        bool
 	socket_release_supported    bool
 	coarse_time_supported       bool
 	socket_storage_supported    bool
@@ -86,6 +90,7 @@ type CgroupBackend struct {
 	access                         sync.RWMutex
 	health                         backendHealth
 	udpRecoveryAccess              sync.Mutex
+	udpReleaseReadAccess           sync.Mutex
 	udpReplyTokenSequence          atomic.Uint64
 	connectedUDPTokenLookupSupport mapBatchSupport
 	connectedUDPTokenKeys          []uint64

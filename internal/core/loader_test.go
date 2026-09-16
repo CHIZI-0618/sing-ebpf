@@ -98,6 +98,41 @@ func TestTCLocalProgramsUseSocketCookieHelper(t *testing.T) {
 	}
 }
 
+func TestCgroupReleaseNotificationUsesRingBufferHelper(t *testing.T) {
+	spec, err := loadCgroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundSection := false
+	for _, program := range spec.Programs {
+		if program.SectionName != "cgroup/sock_release_notify" {
+			continue
+		}
+		foundSection = true
+		foundHelper := false
+		for _, instruction := range program.Instructions {
+			if instruction.IsBuiltinCall() && asm.BuiltinFunc(instruction.Constant) == asm.FnRingbufOutput {
+				foundHelper = true
+				break
+			}
+		}
+		if !foundHelper {
+			t.Fatal("cgroup socket-release notification does not use ring-buffer output")
+		}
+	}
+	if !foundSection {
+		t.Fatal("missing cgroup socket-release notification section")
+	}
+	watch := spec.Maps["cgroup_udp_release_watch"]
+	if watch == nil || watch.KeySize != 8 || watch.ValueSize != 1 {
+		t.Fatalf("invalid cgroup UDP release watch map: %+v", watch)
+	}
+	events := spec.Maps["cgroup_udp_release_events"]
+	if events == nil || events.Type != CiliumEBPF.RingBuf {
+		t.Fatalf("invalid cgroup UDP release event map: %+v", events)
+	}
+}
+
 func TestEmbeddedTCObjectLayout(t *testing.T) {
 	testEmbeddedObjectLayout(t, loadTC, map[string]objectMapLayout{
 		"tc_control":             {4, 72},

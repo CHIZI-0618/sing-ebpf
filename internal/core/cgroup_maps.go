@@ -10,6 +10,7 @@ import (
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/features"
+	"github.com/cilium/ebpf/ringbuf"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,8 +33,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	if uidCapacity == 0 {
 		uidCapacity = 1
 	}
-	var err error
-	runtimeState.maps, err = loadObjectMaps(loadCgroup, map[string]mapSpecOverride{
+	overrides := map[string]mapSpecOverride{
 		"cgroup_control":       {name: "sb_cg_control", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"cgroup_tcp_redirect":  {name: "sb_cg_tcp", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity},
 		"cgroup_udp_redirect":  {name: "sb_cg_udp", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},
@@ -48,7 +48,33 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		"cgroup_bypass_ipv6":   {name: "sb_cg_bypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"cgroup_host_ipv4":     {name: "sb_cg_host4", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries, flags: bpfFlagNoPrealloc},
 		"cgroup_host_ipv6":     {name: "sb_cg_host6", mapType: CiliumEBPF.Hash, maxEntries: maxHostAddressPolicyEntries, flags: bpfFlagNoPrealloc},
-	})
+		"cgroup_udp_release_watch": {
+			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
+		},
+	}
+	if selfBypassMap != nil {
+		// The temporary object map is replaced by the shared owner below.
+		overrides["cgroup_socket_bypass"] = mapSpecOverride{
+			name: "sb_cg_sock_byp", mapType: CiliumEBPF.LRUHash, maxEntries: 1,
+		}
+	}
+	if runtimeState.socket_release_supported && features.HaveMapType(CiliumEBPF.RingBuf) == nil {
+		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
+			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: udpCapacity, flags: bpfFlagNoPrealloc,
+		}
+		overrides["cgroup_udp_release_events"] = mapSpecOverride{
+			name: "sb_cg_rel_evt", mapType: CiliumEBPF.RingBuf, maxEntries: cgroupUDPReleaseRingSize,
+		}
+	}
+	var err error
+	runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
+	if err != nil && overrides["cgroup_udp_release_events"].mapType == CiliumEBPF.RingBuf {
+		delete(overrides, "cgroup_udp_release_events")
+		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
+			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
+		}
+		runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
+	}
 	if err != nil {
 		return err
 	}
@@ -81,6 +107,16 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		} else {
 			_ = closeMaps(storageMaps)
 			runtimeState.socket_storage_supported = false
+		}
+	}
+	if events := runtimeState.maps["cgroup_udp_release_events"]; events != nil {
+		reader, readerErr := ringbuf.NewReader(events)
+		if readerErr == nil {
+			runtimeState.udp_release_reader = reader
+			runtimeState.udp_release_observer = true
+		} else {
+			_ = events.Close()
+			delete(runtimeState.maps, "cgroup_udp_release_events")
 		}
 	}
 	runtimeState.control_map_fd = runtimeState.maps["cgroup_control"].FD()
