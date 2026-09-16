@@ -426,6 +426,15 @@ func (b *TCBackend) RequiresRebuild() bool {
 	return b.health.rebuildRequired != nil
 }
 
+func (b *TCBackend) IsClosed() bool {
+	if b == nil {
+		return true
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	return b.runtime == nil
+}
+
 // invalidateLocked marks the backend unusable after a policy update failed and
 // its rollback failed too. The policy maps and the control flags that gate them
 // no longer agree and there is no longer a known-good state to compute the next

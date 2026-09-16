@@ -355,6 +355,69 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 	return closeErr
 }
 
+// healthCheck is the read-only first stage of the periodic watchdog. It avoids
+// backend creation, map updates, flow purges, sysctl writes and attachment
+// transactions while the already-owned topology is healthy.
+func (d *sharedRewriteDataPlane) healthCheck(interfaceNames []string, hostAddresses []netip.Addr) (bool, error) {
+	if d == nil {
+		return true, nil
+	}
+	d.access.Lock()
+	defer d.access.Unlock()
+	if d.closed || len(d.retiredAttachments) != 0 {
+		return false, nil
+	}
+	desired := make(map[string]netlink.Link, len(interfaceNames))
+	for _, interfaceName := range interfaceNames {
+		device, err := netlink.LinkByName(interfaceName)
+		if tcLinkNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		framing, err := tcLinkFraming(device)
+		if err != nil {
+			return false, err
+		}
+		if framing != commonEBPF.TCLinkFramingEthernet {
+			return false, nil
+		}
+		desired[interfaceName] = device
+	}
+	wantEnabled := len(desired) > 0
+	if d.enabled != wantEnabled || len(d.attachments) != len(desired) {
+		return false, nil
+	}
+	if wantEnabled {
+		if d.backend == nil || d.backend.IsClosed() || d.backend.RequiresRebuild() ||
+			!slices.Equal(d.hostAddresses, hostAddresses) {
+			return false, nil
+		}
+	}
+	for name, device := range desired {
+		attachment := d.attachments[name]
+		if attachment == nil || attachment.interfaceIndex != device.Attrs().Index {
+			return false, nil
+		}
+		localnet, err := os.ReadFile(sharedRewriteLocalnetPath(name))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, err
+		}
+		if strings.TrimSpace(string(localnet)) != "1" {
+			return false, nil
+		}
+		healthy, err := attachment.healthy(device, d.priority, d.backend.ICMPEchoReplyEnabled())
+		if err != nil || !healthy {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func (d *sharedRewriteDataPlane) detachLocked(attachment *sharedRewriteAttachment, callbackEvents *sharedRewriteCallbackEvents) error {
 	if d.backend != nil {
 		if _, _, err := d.backend.PurgeInterfaceFlows(uint32(attachment.interfaceIndex), d.backend.MapCapacity().Proxy); err != nil {
