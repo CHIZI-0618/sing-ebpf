@@ -71,6 +71,11 @@
 #define SB_TC_PATH_DELIVERY 2U
 #define SB_TC_PATH_SOURCE_MAC_VALID 0x80U
 
+#define SB_TC_STAT_SOCKET_LOOKUP_FAILURE 0U
+#define SB_TC_STAT_SK_ASSIGN_FAILURE 1U
+#define SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE 2U
+#define SB_TC_STAT_COUNT 3U
+
 struct sb_tc_control {
     __u32 enabled;
     __u32 flags;
@@ -219,6 +224,7 @@ struct ipv6_fragment_header {
 MAP(tc_control, __u32, struct sb_tc_control, BPF_MAP_TYPE_ARRAY, 1U);
 MAP(tc_listener_sockets, __u32, __u32, BPF_MAP_TYPE_SOCKMAP, SB_TC_LISTENER_COUNT);
 MAP(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_TYPE_LRU_HASH, 65536U);
+MAP(tc_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_TC_STAT_COUNT);
 MAP(tc_self_sockets, __u64, __u32, BPF_MAP_TYPE_LRU_HASH, 65536U);
 MAP(tc_uid_policy, struct sb_tc_uid_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
 MAP(tc_bypass_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
@@ -252,6 +258,11 @@ static struct bpf_sock *(*sk_lookup_udp)(void *ctx, struct bpf_sock_tuple *tuple
 static long (*sk_assign)(void *ctx, struct bpf_sock *socket, __u64 flags) =
     (void *)BPF_FUNC_sk_assign;
 static void (*sk_release)(struct bpf_sock *socket) = (void *)BPF_FUNC_sk_release;
+
+INLINE void increment_stat(__u32 index) {
+    __u64 *value = map_lookup(&tc_stats, &index);
+    if (value != 0) __sync_fetch_and_add(value, 1U);
+}
 
 INLINE __u16 network_order16(__u16 value) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -634,7 +645,10 @@ NOINLINE int assign_socket(struct __sk_buff *skb, const struct sb_tc_control *co
     struct bpf_sock *socket = key->protocol == IPPROTO_TCP_VALUE
         ? lookup_tcp_socket(skb, key)
         : lookup_udp_socket(skb, control, key);
-    if (socket == 0) return TC_ACT_SHOT;
+    if (socket == 0) {
+        increment_stat(SB_TC_STAT_SOCKET_LOOKUP_FAILURE);
+        return TC_ACT_SHOT;
+    }
     struct sb_tc_assign_key assignment_key = *key;
     if (key->protocol == IPPROTO_UDP_VALUE && path == SB_TC_PATH_SHARED)
         assignment_key.interface_index = skb->ifindex;
@@ -650,14 +664,14 @@ NOINLINE int assign_socket(struct __sk_buff *skb, const struct sb_tc_control *co
         existing->ifindex != value.ifindex ||
         existing->path != value.path || existing->source_mac_valid != value.source_mac_valid;
     if (!assignment_changed && source_mac_valid) assignment_changed = !source_mac_equal(existing->source_mac, value.source_mac);
-    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
-        sk_release(socket);
-        return TC_ACT_SHOT;
-    }
     long result = sk_assign(skb, socket, 0U);
     sk_release(socket);
     if (result != 0) {
-        map_delete(&tc_assignment, &assignment_key);
+        increment_stat(SB_TC_STAT_SK_ASSIGN_FAILURE);
+        return TC_ACT_SHOT;
+    }
+    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
+        increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
     return TC_ACT_OK;
@@ -670,7 +684,10 @@ NOINLINE int assign_socket_legacy(struct __sk_buff *skb, const struct sb_tc_cont
     struct bpf_sock *socket = key->protocol == IPPROTO_TCP_VALUE
         ? lookup_tcp_socket_legacy(skb, control, key)
         : lookup_udp_socket(skb, control, key);
-    if (socket == 0) return TC_ACT_SHOT;
+    if (socket == 0) {
+        increment_stat(SB_TC_STAT_SOCKET_LOOKUP_FAILURE);
+        return TC_ACT_SHOT;
+    }
     struct sb_tc_assign_key assignment_key = *key;
     if (key->protocol == IPPROTO_UDP_VALUE && path == SB_TC_PATH_SHARED)
         assignment_key.interface_index = skb->ifindex;
@@ -686,14 +703,14 @@ NOINLINE int assign_socket_legacy(struct __sk_buff *skb, const struct sb_tc_cont
         existing->ifindex != value.ifindex ||
         existing->path != value.path || existing->source_mac_valid != value.source_mac_valid;
     if (!assignment_changed && source_mac_valid) assignment_changed = !source_mac_equal(existing->source_mac, value.source_mac);
-    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
-        sk_release(socket);
-        return TC_ACT_SHOT;
-    }
     long result = sk_assign(skb, socket, 0U);
     sk_release(socket);
     if (result != 0) {
-        map_delete(&tc_assignment, &assignment_key);
+        increment_stat(SB_TC_STAT_SK_ASSIGN_FAILURE);
+        return TC_ACT_SHOT;
+    }
+    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
+        increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
     return TC_ACT_OK;
@@ -704,7 +721,10 @@ NOINLINE int assign_udp_socket(struct __sk_buff *skb, const struct sb_tc_control
     bool source_mac_valid = (path & SB_TC_PATH_SOURCE_MAC_VALID) != 0U;
     path &= ~SB_TC_PATH_SOURCE_MAC_VALID;
     struct bpf_sock *socket = lookup_udp_socket(skb, control, key);
-    if (socket == 0) return TC_ACT_SHOT;
+    if (socket == 0) {
+        increment_stat(SB_TC_STAT_SOCKET_LOOKUP_FAILURE);
+        return TC_ACT_SHOT;
+    }
     struct sb_tc_assign_key assignment_key = *key;
     assignment_key.interface_index = path == SB_TC_PATH_SHARED ? skb->ifindex : 0U;
     struct sb_tc_assign_value *existing = map_lookup(&tc_assignment, &assignment_key);
@@ -719,14 +739,14 @@ NOINLINE int assign_udp_socket(struct __sk_buff *skb, const struct sb_tc_control
         existing->ifindex != value.ifindex || existing->path != value.path ||
         existing->source_mac_valid != value.source_mac_valid;
     if (!assignment_changed && source_mac_valid) assignment_changed = !source_mac_equal(existing->source_mac, value.source_mac);
-    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
-        sk_release(socket);
-        return TC_ACT_SHOT;
-    }
     long result = sk_assign(skb, socket, 0U);
     sk_release(socket);
     if (result != 0) {
-        map_delete(&tc_assignment, &assignment_key);
+        increment_stat(SB_TC_STAT_SK_ASSIGN_FAILURE);
+        return TC_ACT_SHOT;
+    }
+    if (assignment_changed && map_update(&tc_assignment, &assignment_key, &value, BPF_ANY) != 0) {
+        increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
     return TC_ACT_OK;
