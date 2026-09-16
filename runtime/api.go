@@ -39,6 +39,7 @@ type TCRuntime interface {
 	Backend() *core.TCBackend
 	NetworkInfo() core.TCNetworkInfo
 	Reconcile(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) error
+	HealthCheck(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) (bool, error)
 	RepairInfrastructure() (bool, error)
 	AttachmentStateChanged(localInterface string, sharedInterfaces []string) (bool, error)
 	AttachmentDescriptions() []string
@@ -121,6 +122,10 @@ func (d *tcDataPlane) Reconcile(localInterface string, sharedInterfaces []string
 	return d.reconcile(localInterface, sharedInterfaces, hostAddresses)
 }
 
+func (d *tcDataPlane) HealthCheck(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) (bool, error) {
+	return d.healthCheck(localInterface, sharedInterfaces, hostAddresses)
+}
+
 func (d *tcDataPlane) RepairInfrastructure() (bool, error) {
 	return d.repairInfrastructure()
 }
@@ -150,6 +155,7 @@ var _ TCRuntime = (*tcDataPlane)(nil)
 type SharedPacketRewriteRuntime interface {
 	Backend() *core.SharedPacketRewriteBackend
 	Reconcile(interfaceNames []string, hostAddresses []netip.Addr) error
+	HealthCheck(interfaceNames []string, hostAddresses []netip.Addr) (bool, error)
 	IsEnabled() bool
 	AttachmentDescriptions() []string
 	AttachmentDiagnostics() []core.AttachmentInfo
@@ -198,6 +204,10 @@ func (d *sharedRewriteDataPlane) Backend() *core.SharedPacketRewriteBackend {
 
 func (d *sharedRewriteDataPlane) Reconcile(interfaceNames []string, hostAddresses []netip.Addr) error {
 	return d.reconcile(interfaceNames, hostAddresses)
+}
+
+func (d *sharedRewriteDataPlane) HealthCheck(interfaceNames []string, hostAddresses []netip.Addr) (bool, error) {
+	return d.healthCheck(interfaceNames, hostAddresses)
 }
 
 func (d *sharedRewriteDataPlane) IsEnabled() bool { return d.isEnabled() }

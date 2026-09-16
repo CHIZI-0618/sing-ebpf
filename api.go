@@ -280,6 +280,9 @@ func (b *TCBackend) TCPListenerLookupMode() string {
 func (b *TCBackend) RequiresRebuild() bool {
 	return b != nil && core.UnwrapTCBackend(b).RequiresRebuild()
 }
+func (b *TCBackend) IsClosed() bool {
+	return b == nil || core.UnwrapTCBackend(b).IsClosed()
+}
 func (b *TCBackend) ICMPEchoReplyEnabled() bool {
 	return b != nil && core.UnwrapTCBackend(b).ICMPEchoReplyEnabled()
 }
