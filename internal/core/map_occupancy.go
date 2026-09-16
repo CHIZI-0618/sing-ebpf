@@ -27,15 +27,16 @@ type MapOccupancy struct {
 }
 
 type MapOccupancyReport struct {
-	Maps  []MapOccupancy `json:"maps"`
-	Error string         `json:"error,omitempty"`
+	Status string         `json:"status"`
+	Maps   []MapOccupancy `json:"maps"`
+	Error  string         `json:"error,omitempty"`
 }
 
 // InspectMapOccupancy enumerates only maps owned by sing-ebpf (sb_ prefix).
 // It is deliberately an on-demand operation: callers should invoke it from a
 // user-facing diagnostic command, never from a watchdog or data-plane path.
 func InspectMapOccupancy() MapOccupancyReport {
-	report := MapOccupancyReport{Maps: make([]MapOccupancy, 0)}
+	report := MapOccupancyReport{Status: "pass", Maps: make([]MapOccupancy, 0)}
 	var id CiliumEBPF.MapID
 	for {
 		next, err := CiliumEBPF.MapGetNextID(id)
@@ -44,6 +45,7 @@ func InspectMapOccupancy() MapOccupancyReport {
 				break
 			}
 			report.Error = err.Error()
+			report.Status = "unknown"
 			break
 		}
 		id = next

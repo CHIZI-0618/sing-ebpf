@@ -46,11 +46,17 @@ const (
 )
 
 type KernelProbeOptions struct {
-	Mode                KernelProbeMode
-	LocalDataPlane      KernelProbeDataPlane
-	SharedDataPlane     KernelProbeDataPlane
-	Network             []string
-	InterfaceNames      []string
+	Mode            KernelProbeMode
+	LocalDataPlane  KernelProbeDataPlane
+	SharedDataPlane KernelProbeDataPlane
+	Network         []string
+	InterfaceNames  []string
+	// LocalInterface optionally identifies the interface used by local TC.
+	// It is inspected read-only; status never creates or changes a qdisc.
+	LocalInterface string
+	// CgroupPath optionally identifies the cgroup used by local cgroup hooks.
+	// When empty, the current process cgroup is inspected.
+	CgroupPath          string
 	EnableIPv6          bool
 	NeedLPMPolicy       bool
 	NeedProcessTracking bool
@@ -120,6 +126,7 @@ type KernelProbeProgram struct {
 	Name     string
 	Type     CiliumEBPF.ProgramType
 	MapCount int
+	MapIDs   []CiliumEBPF.MapID
 }
 
 type KernelProbeReport struct {
@@ -238,7 +245,7 @@ func ProbeKernel(options KernelProbeOptions) (*KernelProbeReport, error) {
 	}
 	probeCommonCapabilities(report, memlockErr, plan)
 	if localPlane != "" {
-		probeLocalCapabilities(report, localPlane, plan.enableTCP, plan.enableUDP)
+		probeLocalCapabilities(report, localPlane, plan.enableTCP, plan.enableUDP, options)
 	}
 	if sharedPlane != "" {
 		probeSharedCapabilities(report, sharedPlane, plan.interfaceNames)

@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	CiliumEBPF "github.com/cilium/ebpf"
 )
 
 type kernelProbeJSONProgram struct {
-	ID       uint32 `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	MapCount int    `json:"map_count"`
+	ID       uint32   `json:"id"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	MapCount int      `json:"map_count"`
+	MapIDs   []uint32 `json:"map_ids,omitempty"`
 }
 
 type kernelProbeJSONSummary struct {
@@ -24,6 +27,17 @@ type kernelProbeJSONSummary struct {
 	RequiredFailures int `json:"required_failures"`
 	RequiredUnknowns int `json:"required_unknowns"`
 	RequiredIssues   int `json:"required_issues"`
+}
+
+func mapIDs(ids []CiliumEBPF.MapID) []uint32 {
+	if len(ids) == 0 {
+		return nil
+	}
+	result := make([]uint32, len(ids))
+	for index, id := range ids {
+		result[index] = uint32(id)
+	}
+	return result
 }
 
 type kernelProbeJSONReport struct {
@@ -82,6 +96,7 @@ func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) err
 			Name:     program.Name,
 			Type:     program.Type.String(),
 			MapCount: program.MapCount,
+			MapIDs:   mapIDs(program.MapIDs),
 		})
 	}
 	encoder := json.NewEncoder(writer)
