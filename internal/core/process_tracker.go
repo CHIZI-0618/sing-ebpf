@@ -3,6 +3,7 @@
 package core
 
 import (
+	"runtime"
 	"slices"
 	"sync"
 
@@ -11,7 +12,17 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
-const processSocketOwnerCapacity = 65536
+const (
+	processSocketOwnerCapacity        = 65536
+	compactProcessSocketOwnerCapacity = 8192
+)
+
+func processSocketOwnerMapCapacity(platform string) uint32 {
+	if platform == "android" {
+		return compactProcessSocketOwnerCapacity
+	}
+	return processSocketOwnerCapacity
+}
 
 const (
 	socketMetadataPolicyBypass    = SocketMetadataPolicyBypass
@@ -64,7 +75,7 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 		Type:       CiliumEBPF.LRUHash,
 		KeySize:    8,
 		ValueSize:  8,
-		MaxEntries: processSocketOwnerCapacity,
+		MaxEntries: processSocketOwnerMapCapacity(runtime.GOOS),
 	})
 	if err != nil {
 		return nil, E.Cause(err, "create eBPF process owner map")
