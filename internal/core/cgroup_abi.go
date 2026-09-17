@@ -58,7 +58,7 @@ const (
 
 type cgroupControl struct {
 	Flags                    uint32
-	Reserved                 uint32
+	NetworkGeneration        uint32
 	UDPTimeoutSeconds        uint32
 	RedirectIPv4Prefix       uint32
 	RedirectIPv4HostMask     uint32
@@ -190,11 +190,11 @@ type udpFlowKey struct {
 }
 
 type udpFlowValue struct {
-	Action          uint8
-	Reserved        [3]byte
-	LastSeenSeconds uint32
-	Listener        listenerLookupKey
-	Reserved2       [4]byte
+	Action            uint8
+	Reserved          [3]byte
+	LastSeenSeconds   uint32
+	Listener          listenerLookupKey
+	NetworkGeneration uint32
 }
 
 func makeUDPFlowKey(original originalDestinationValue) udpFlowKey {

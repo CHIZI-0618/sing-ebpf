@@ -147,6 +147,25 @@ func assertCgroupUDPMapHandoff(t *testing.T, backend *CgroupBackend) {
 		t.Fatal(err)
 	}
 	listener := netip.AddrPortFrom(token, backend.listenerPort)
+	controlKey := uint32(0)
+	var controlBefore cgroupControl
+	if err = backend.runtime.maps["cgroup_control"].Lookup(&controlKey, &controlBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err = backend.ResetNetworkState(); err != nil {
+		t.Fatal(err)
+	}
+	var controlAfter cgroupControl
+	if err = backend.runtime.maps["cgroup_control"].Lookup(&controlKey, &controlAfter); err != nil {
+		t.Fatal(err)
+	}
+	if controlAfter.NetworkGeneration != controlBefore.NetworkGeneration+1 {
+		t.Fatalf(
+			"network generation did not advance: before=%d after=%d",
+			controlBefore.NetworkGeneration,
+			controlAfter.NetworkGeneration,
+		)
+	}
 	recovered, err := backend.LookupOriginal(ProtocolUDP, listener)
 	if err != nil {
 		t.Fatal(err)

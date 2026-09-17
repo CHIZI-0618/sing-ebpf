@@ -60,8 +60,11 @@ struct sb_ebpf_udp_socket_flow {
     __u8 action;
     __u8 reserved[3];
     __u32 last_seen_seconds;
+    __u32 network_generation;
     struct sb_ebpf_listener_key listener;
 };
+_Static_assert(sizeof(struct sb_ebpf_udp_socket_flow) == 52U,
+    "unexpected UDP socket flow ABI");
 struct bpf_map_def SEC("maps") cgroup_udp_socket_storage = {
     .type = BPF_MAP_TYPE_SK_STORAGE,
     .key_size = 0U,
@@ -197,6 +200,7 @@ INLINE bool socket_flow_matches(
 
 INLINE void socket_flow_store(
     struct bpf_sock_addr *ctx,
+    const struct sb_ebpf_cgroup_control *config,
     __u8 family,
     __u8 protocol,
     __u16 port,
@@ -210,6 +214,7 @@ INLINE void socket_flow_store(
         .port = port,
         .action = action,
         .last_seen_seconds = (__u32)(ktime_get_ns() / 1000000000ULL),
+        .network_generation = config->network_generation,
     };
     __builtin_memcpy(initial.addr, address, sizeof(initial.addr));
     if (listener != 0) __builtin_memcpy(&initial.listener, listener, sizeof(initial.listener));
@@ -282,7 +287,8 @@ INLINE bool token_v4(
     __u32 address,
     __u8 protocol,
     __u64 cookie) {
-    __u32 seed = mix32(address ^ ((__u32)value->port << 16) ^ (__u32)cookie ^ (__u32)(cookie >> 32));
+    __u32 seed = mix32(address ^ ((__u32)value->port << 16) ^ (__u32)cookie ^
+        (__u32)(cookie >> 32) ^ config->network_generation);
     key->family = AF_INET_VALUE;
     key->protocol = protocol;
     key->listener_port = config->listener_port;
@@ -314,9 +320,10 @@ INLINE bool token_v6(
     const __u32 address[4],
     __u8 protocol,
     __u64 cookie) {
-    __u32 seed0 = mix32(
-        address[0] ^ address[2] ^ ((__u32)value->port << 16) ^ (__u32)cookie);
-    __u32 seed1 = mix32(address[1] ^ address[3] ^ (__u32)(cookie >> 32) ^ 0x85ebca6bU);
+    __u32 seed0 = mix32(address[0] ^ address[2] ^ ((__u32)value->port << 16) ^
+        (__u32)cookie ^ config->network_generation);
+    __u32 seed1 = mix32(address[1] ^ address[3] ^ (__u32)(cookie >> 32) ^
+        config->network_generation ^ 0x85ebca6bU);
     key->family = AF_INET6_VALUE;
     key->protocol = protocol;
     key->listener_port = config->listener_port;
@@ -389,7 +396,9 @@ INLINE int flow_action(
         struct sb_ebpf_udp_socket_flow *stored = socket_flow_lookup(ctx);
         if (socket_flow_matches(stored, family, protocol, port, address)) {
             __u32 now = (__u32)(flow_time_ns() / 1000000000ULL);
-            if (now - stored->last_seen_seconds <= config->udp_timeout_seconds) {
+            if (stored->network_generation != config->network_generation) {
+                (void)sk_storage_delete(&cgroup_udp_socket_storage, ctx->sk);
+            } else if (now - stored->last_seen_seconds <= config->udp_timeout_seconds) {
                 stored->last_seen_seconds = now;
                 if (stored->action == SB_EBPF_UDP_FLOW_ACTION_BYPASS) return FLOW_CACHE_BYPASS;
                 if (stored->action == SB_EBPF_UDP_FLOW_ACTION_PROXY) {
@@ -414,7 +423,8 @@ INLINE int flow_action(
     struct sb_ebpf_udp_flow_value *flow = map_lookup(&cgroup_udp_flow, &flow_key);
     if (flow == 0) return FLOW_CACHE_MISS;
     __u32 now = (__u32)(flow_time_ns() / 1000000000ULL);
-    if (now - flow->last_seen_seconds > config->udp_timeout_seconds) {
+    if (flow->network_generation != config->network_generation ||
+        now - flow->last_seen_seconds > config->udp_timeout_seconds) {
         map_delete(&cgroup_udp_flow, &flow_key);
         return FLOW_CACHE_MISS;
     }
@@ -441,7 +451,8 @@ INLINE void flow_store(
     if ((config->flags & SB_EBPF_CGROUP_FLAG_UDP_FLOW) == 0U || cookie == 0U) return;
     struct sb_ebpf_udp_flow_key key = {.cookie = cookie, .family = family, .protocol = protocol, .port = port};
     struct sb_ebpf_udp_flow_value value = {.action = action,
-        .last_seen_seconds = (__u32)(flow_time_ns() / 1000000000ULL)};
+        .last_seen_seconds = (__u32)(flow_time_ns() / 1000000000ULL),
+        .network_generation = config->network_generation};
     __builtin_memcpy(key.addr, address, sizeof(key.addr));
     if (listener != 0) __builtin_memcpy(&value.listener, listener, sizeof(value.listener));
     map_update(&cgroup_udp_flow, &key, &value, 0U);
@@ -644,7 +655,7 @@ INLINE int handle_v4(
     }
     if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
-    if (connected_udp) socket_flow_store(ctx, AF_INET_VALUE, protocol, port, flow_address,
+    if (connected_udp) socket_flow_store(ctx, config, AF_INET_VALUE, protocol, port, flow_address,
         SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
 #endif
     return rewrite_v4(ctx, &listener) ? 1 : 0;
@@ -728,7 +739,7 @@ INLINE int handle_v6(
                         SB_EBPF_UDP_FLOW_ACTION_BYPASS, 0);
                 }
 #ifdef SB_EBPF_USE_SK_STORAGE
-                if (connected_udp) socket_flow_store(ctx, AF_INET_VALUE, protocol, port, flow_address,
+                if (connected_udp) socket_flow_store(ctx, config, AF_INET_VALUE, protocol, port, flow_address,
                     SB_EBPF_UDP_FLOW_ACTION_BYPASS, 0);
 #endif
                 return 1;
@@ -749,7 +760,7 @@ INLINE int handle_v6(
         }
         if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
-        if (connected_udp) socket_flow_store(ctx, AF_INET_VALUE, protocol, port, flow_address,
+        if (connected_udp) socket_flow_store(ctx, config, AF_INET_VALUE, protocol, port, flow_address,
             SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
 #endif
         return rewrite_v4_mapped(ctx, &listener) ? 1 : 0;
@@ -801,7 +812,7 @@ INLINE int handle_v6(
                     SB_EBPF_UDP_FLOW_ACTION_BYPASS, 0);
             }
 #ifdef SB_EBPF_USE_SK_STORAGE
-            if (connected_udp) socket_flow_store(ctx, AF_INET6_VALUE, protocol, port, flow_address,
+            if (connected_udp) socket_flow_store(ctx, config, AF_INET6_VALUE, protocol, port, flow_address,
                 SB_EBPF_UDP_FLOW_ACTION_BYPASS, 0);
 #endif
             return 1;
@@ -822,7 +833,7 @@ INLINE int handle_v6(
     }
     if (protocol == UDP_VALUE) watch_udp_release(config, cookie);
 #ifdef SB_EBPF_USE_SK_STORAGE
-    if (connected_udp) socket_flow_store(ctx, AF_INET6_VALUE, protocol, port, flow_address,
+    if (connected_udp) socket_flow_store(ctx, config, AF_INET6_VALUE, protocol, port, flow_address,
         SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
 #endif
     return rewrite_v6(ctx, &listener) ? 1 : 0;

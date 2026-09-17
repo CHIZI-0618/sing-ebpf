@@ -122,6 +122,7 @@ type CgroupBackend struct {
 	dnsMode                        DNSMode
 	bypassPrivateAddress           bool
 	udpTimeoutSeconds              uint32
+	networkGeneration              uint32
 	listenerPort                   uint16
 }
 

@@ -258,6 +258,7 @@ func (b *CgroupBackend) updateCgroupControl(listenerPort uint16) error {
 	ipv4Prefix, ipv4HostMask := cgroupIPv4Redirect(b.redirectIPv4)
 	control := cgroupControl{
 		Flags:                flags,
+		NetworkGeneration:    b.networkGeneration,
 		UDPTimeoutSeconds:    b.udpTimeoutSeconds,
 		DNSMode:              b.dnsMode,
 		RedirectIPv4Prefix:   ipv4Prefix,

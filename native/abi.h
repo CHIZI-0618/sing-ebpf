@@ -39,7 +39,7 @@
 #define SB_EBPF_CGROUP_FLAG_UDP_RELEASE_NOTIFY (1U << 18U)
 struct sb_ebpf_cgroup_control {
     __u32 flags;
-	__u32 reserved;
+    __u32 network_generation;
     __u32 udp_timeout_seconds;
     __u32 redirect_ipv4_prefix;
     __u32 redirect_ipv4_host_mask;
@@ -53,6 +53,8 @@ struct sb_ebpf_cgroup_control {
 };
 
 _Static_assert(sizeof(struct sb_ebpf_cgroup_control) == 72U, "unexpected cgroup control ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_cgroup_control, network_generation) == 4U,
+    "unexpected cgroup network generation ABI");
 
 struct sb_ebpf_listener_key {
     __u8 family;
@@ -97,7 +99,7 @@ struct sb_ebpf_udp_flow_value {
     __u8 reserved[3];
     __u32 last_seen_seconds;
     struct sb_ebpf_listener_key listener;
-    __u8 reserved2[4];
+    __u32 network_generation;
 };
 
 _Static_assert(sizeof(struct sb_ebpf_listener_key) == 20U, "unexpected redirect key ABI");
@@ -108,6 +110,8 @@ _Static_assert(sizeof(struct sb_ebpf_udp_peer_key) == 8U, "unexpected UDP peer k
 _Static_assert(sizeof(struct sb_ebpf_udp_peer_value) == 20U, "unexpected UDP peer value ABI");
 _Static_assert(sizeof(struct sb_ebpf_udp_flow_key) == 32U, "unexpected UDP flow key ABI");
 _Static_assert(sizeof(struct sb_ebpf_udp_flow_value) == 32U, "unexpected UDP flow value ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_udp_flow_value, network_generation) == 28U,
+    "unexpected UDP flow network generation ABI");
 
 struct sb_ebpf_uid_lpm_key {
     __u32 prefixlen;
