@@ -47,6 +47,7 @@ MAP(cgroup_bypass_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_LPM
 MAP(cgroup_host_ipv4, struct sb_ebpf_ipv4_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_host_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_release_watch, __u64, __u8, BPF_MAP_TYPE_HASH);
+MAP(cgroup_udp_release_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY);
 struct bpf_map_def SEC("maps") cgroup_udp_release_events = {
     .type = BPF_MAP_TYPE_RINGBUF,
     .max_entries = 65536U,
@@ -944,7 +945,11 @@ INLINE int release_socket_notify(struct bpf_sock *ctx) {
         map_delete(&cgroup_udp_release_watch, &cookie);
         // Notification is best-effort. A full ring only postpones userspace
         // cleanup until the ordinary UDP deadline.
-        (void)ringbuf_output(&cgroup_udp_release_events, &cookie, sizeof(cookie), 0U);
+        if (ringbuf_output(&cgroup_udp_release_events, &cookie, sizeof(cookie), 0U) != 0) {
+            __u32 index = 0U;
+            __u64 *drops = map_lookup(&cgroup_udp_release_stats, &index);
+            if (drops != 0) *drops += 1U;
+        }
     }
     return release_socket_cookie(cookie);
 }

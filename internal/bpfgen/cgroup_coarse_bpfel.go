@@ -29,6 +29,7 @@ const (
 	CgroupCoarseMapCgroupUdpRecovery           = "cgroup_udp_recovery"
 	CgroupCoarseMapCgroupUdpRedirect           = "cgroup_udp_redirect"
 	CgroupCoarseMapCgroupUdpReleaseEvents      = "cgroup_udp_release_events"
+	CgroupCoarseMapCgroupUdpReleaseStats       = "cgroup_udp_release_stats"
 	CgroupCoarseMapCgroupUdpReleaseWatch       = "cgroup_udp_release_watch"
 	CgroupCoarseMapCgroupUdpToken              = "cgroup_udp_token"
 	CgroupCoarseMapCgroupUidPolicy             = "cgroup_uid_policy"
@@ -129,6 +130,7 @@ type CgroupCoarseMapSpecs struct {
 	CgroupUdpRecovery      *ebpf.MapSpec `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.MapSpec `ebpf:"cgroup_udp_redirect"`
 	CgroupUdpReleaseEvents *ebpf.MapSpec `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseStats  *ebpf.MapSpec `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.MapSpec `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpToken         *ebpf.MapSpec `ebpf:"cgroup_udp_token"`
 	CgroupUidPolicy        *ebpf.MapSpec `ebpf:"cgroup_uid_policy"`
@@ -173,6 +175,7 @@ type CgroupCoarseMaps struct {
 	CgroupUdpRecovery      *ebpf.Map `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.Map `ebpf:"cgroup_udp_redirect"`
 	CgroupUdpReleaseEvents *ebpf.Map `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseStats  *ebpf.Map `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.Map `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpToken         *ebpf.Map `ebpf:"cgroup_udp_token"`
 	CgroupUidPolicy        *ebpf.Map `ebpf:"cgroup_uid_policy"`
@@ -193,6 +196,7 @@ func (m *CgroupCoarseMaps) Close() error {
 		m.CgroupUdpRecovery,
 		m.CgroupUdpRedirect,
 		m.CgroupUdpReleaseEvents,
+		m.CgroupUdpReleaseStats,
 		m.CgroupUdpReleaseWatch,
 		m.CgroupUdpToken,
 		m.CgroupUidPolicy,

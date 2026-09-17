@@ -76,6 +76,35 @@ func (b *CgroupBackend) UDPUserspaceCleanupMode() string {
 	return cgroupUDPUserspaceCleanupDeadline
 }
 
+// UDPReleaseNotificationDrops returns the number of socket-release events
+// that could not be submitted because the optional ring buffer was full.
+// It is read only when diagnostics are requested and does not add polling or
+// userspace work to the normal data path.
+func (b *CgroupBackend) UDPReleaseNotificationDrops() (uint64, error) {
+	if b == nil {
+		return 0, unix.EOPNOTSUPP
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil || !b.runtime.udp_release_observer {
+		return 0, unix.EOPNOTSUPP
+	}
+	statsMap := b.runtime.maps["cgroup_udp_release_stats"]
+	if statsMap == nil {
+		return 0, unix.EOPNOTSUPP
+	}
+	index := uint32(0)
+	var perCPU []uint64
+	if err := statsMap.Lookup(&index, &perCPU); err != nil {
+		return 0, err
+	}
+	var total uint64
+	for _, value := range perCPU {
+		total += value
+	}
+	return total, nil
+}
+
 // ReadUDPRelease blocks until the cgroup socket-release hook reports a socket
 // cookie that entered the local UDP data path. The notification is optional:
 // callers must retain their normal UDP deadline for unsupported kernels and

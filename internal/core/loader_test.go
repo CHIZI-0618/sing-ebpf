@@ -199,6 +199,10 @@ func TestCgroupReleaseNotificationUsesRingBufferHelper(t *testing.T) {
 	if events == nil || events.Type != CiliumEBPF.RingBuf {
 		t.Fatalf("invalid cgroup UDP release event map: %+v", events)
 	}
+	stats := spec.Maps["cgroup_udp_release_stats"]
+	if stats == nil || stats.Type != CiliumEBPF.PerCPUArray || stats.KeySize != 4 || stats.ValueSize != 8 {
+		t.Fatalf("invalid cgroup UDP release stats map: %+v", stats)
+	}
 }
 
 func TestEmbeddedTCObjectLayout(t *testing.T) {

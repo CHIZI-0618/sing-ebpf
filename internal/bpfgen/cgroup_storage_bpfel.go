@@ -29,6 +29,7 @@ const (
 	CgroupStorageMapCgroupUdpRecovery           = "cgroup_udp_recovery"
 	CgroupStorageMapCgroupUdpRedirect           = "cgroup_udp_redirect"
 	CgroupStorageMapCgroupUdpReleaseEvents      = "cgroup_udp_release_events"
+	CgroupStorageMapCgroupUdpReleaseStats       = "cgroup_udp_release_stats"
 	CgroupStorageMapCgroupUdpReleaseWatch       = "cgroup_udp_release_watch"
 	CgroupStorageMapCgroupUdpSocketStorage      = "cgroup_udp_socket_storage"
 	CgroupStorageMapCgroupUdpToken              = "cgroup_udp_token"
@@ -130,6 +131,7 @@ type CgroupStorageMapSpecs struct {
 	CgroupUdpRecovery      *ebpf.MapSpec `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.MapSpec `ebpf:"cgroup_udp_redirect"`
 	CgroupUdpReleaseEvents *ebpf.MapSpec `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseStats  *ebpf.MapSpec `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.MapSpec `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpSocketStorage *ebpf.MapSpec `ebpf:"cgroup_udp_socket_storage"`
 	CgroupUdpToken         *ebpf.MapSpec `ebpf:"cgroup_udp_token"`
@@ -175,6 +177,7 @@ type CgroupStorageMaps struct {
 	CgroupUdpRecovery      *ebpf.Map `ebpf:"cgroup_udp_recovery"`
 	CgroupUdpRedirect      *ebpf.Map `ebpf:"cgroup_udp_redirect"`
 	CgroupUdpReleaseEvents *ebpf.Map `ebpf:"cgroup_udp_release_events"`
+	CgroupUdpReleaseStats  *ebpf.Map `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.Map `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpSocketStorage *ebpf.Map `ebpf:"cgroup_udp_socket_storage"`
 	CgroupUdpToken         *ebpf.Map `ebpf:"cgroup_udp_token"`
@@ -196,6 +199,7 @@ func (m *CgroupStorageMaps) Close() error {
 		m.CgroupUdpRecovery,
 		m.CgroupUdpRedirect,
 		m.CgroupUdpReleaseEvents,
+		m.CgroupUdpReleaseStats,
 		m.CgroupUdpReleaseWatch,
 		m.CgroupUdpSocketStorage,
 		m.CgroupUdpToken,
