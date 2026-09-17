@@ -7,17 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	CiliumEBPF "github.com/cilium/ebpf"
 )
-
-type kernelProbeJSONProgram struct {
-	ID       uint32   `json:"id"`
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`
-	MapCount int      `json:"map_count"`
-	MapIDs   []uint32 `json:"map_ids,omitempty"`
-}
 
 type kernelProbeJSONSummary struct {
 	Pass             int `json:"pass"`
@@ -29,34 +19,20 @@ type kernelProbeJSONSummary struct {
 	RequiredIssues   int `json:"required_issues"`
 }
 
-func mapIDs(ids []CiliumEBPF.MapID) []uint32 {
-	if len(ids) == 0 {
-		return nil
-	}
-	result := make([]uint32, len(ids))
-	for index, id := range ids {
-		result[index] = uint32(id)
-	}
-	return result
-}
-
 type kernelProbeJSONReport struct {
-	Platform         string                   `json:"platform"`
-	KernelRelease    string                   `json:"kernel_release"`
-	Architecture     string                   `json:"architecture"`
-	Mode             KernelProbeMode          `json:"mode"`
-	LocalDataPlane   KernelProbeDataPlane     `json:"local_data_plane,omitempty"`
-	SharedDataPlane  KernelProbeDataPlane     `json:"shared_data_plane,omitempty"`
-	Network          []string                 `json:"network"`
-	IPv6             bool                     `json:"ipv6"`
-	Findings         []KernelProbeFinding     `json:"findings"`
-	ActivePrograms   []kernelProbeJSONProgram `json:"active_programs"`
-	ActiveStateError string                   `json:"active_state_error,omitempty"`
-	Preflight        bool                     `json:"preflight"`
-	ExactObjectLoad  bool                     `json:"exact_object_load"`
-	MapOccupancy     MapOccupancyReport       `json:"map_occupancy"`
-	Summary          kernelProbeJSONSummary   `json:"summary"`
-	Result           string                   `json:"result"`
+	Platform        string                 `json:"platform"`
+	KernelRelease   string                 `json:"kernel_release"`
+	Architecture    string                 `json:"architecture"`
+	Mode            KernelProbeMode        `json:"mode"`
+	LocalDataPlane  KernelProbeDataPlane   `json:"local_data_plane,omitempty"`
+	SharedDataPlane KernelProbeDataPlane   `json:"shared_data_plane,omitempty"`
+	Network         []string               `json:"network"`
+	IPv6            bool                   `json:"ipv6"`
+	Findings        []KernelProbeFinding   `json:"findings"`
+	Preflight       bool                   `json:"preflight"`
+	ExactObjectLoad bool                   `json:"exact_object_load"`
+	Summary         kernelProbeJSONSummary `json:"summary"`
+	Result          string                 `json:"result"`
 }
 
 func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) error {
@@ -71,10 +47,8 @@ func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) err
 		Network:         report.Network,
 		IPv6:            report.IPv6,
 		Findings:        report.Findings,
-		ActivePrograms:  make([]kernelProbeJSONProgram, 0, len(report.ActivePrograms)),
 		Preflight:       true,
 		ExactObjectLoad: report.ExactObjectLoad,
-		MapOccupancy:    report.MapOccupancy,
 		Summary: kernelProbeJSONSummary{
 			Pass:             counts[KernelProbePass],
 			Warn:             counts[KernelProbeWarn],
@@ -86,19 +60,6 @@ func WriteKernelProbeReportJSON(writer io.Writer, report *KernelProbeReport) err
 		},
 		Result: kernelProbeResult(report),
 	}
-	if report.ActiveStateErr != nil {
-		output.ActiveStateError = shortProbeError(report.ActiveStateErr)
-	}
-
-	for _, program := range report.ActivePrograms {
-		output.ActivePrograms = append(output.ActivePrograms, kernelProbeJSONProgram{
-			ID:       uint32(program.ID),
-			Name:     program.Name,
-			Type:     program.Type.String(),
-			MapCount: program.MapCount,
-			MapIDs:   mapIDs(program.MapIDs),
-		})
-	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(output)
@@ -108,7 +69,7 @@ func kernelProbeResult(report *KernelProbeReport) string {
 	if report.RequiredFailures() > 0 {
 		return "unsupported"
 	}
-	if report.RequiredUnknowns() > 0 || report.ActiveStateErr != nil {
+	if report.RequiredUnknowns() > 0 {
 		return "inconclusive"
 	}
 	return "preflight_passed"
@@ -152,51 +113,6 @@ func WriteKernelProbeReport(writer io.Writer, report *KernelProbeReport) error {
 		}
 	}
 
-	if _, err := fmt.Fprintln(writer, "\nActive sing-ebpf eBPF programs"); err != nil {
-		return err
-	}
-	if report.ActiveStateErr != nil {
-		if _, err := fmt.Fprintln(writer, "  UNKNOWN: program enumeration was inconclusive:", shortProbeError(report.ActiveStateErr)); err != nil {
-			return err
-		}
-	} else if len(report.ActivePrograms) == 0 {
-		if _, err := fmt.Fprintln(writer, "  none visible"); err != nil {
-			return err
-		}
-	} else {
-		for _, program := range report.ActivePrograms {
-			if _, err := fmt.Fprintf(writer, "  id=%d name=%s type=%s maps=%d\n",
-				program.ID, program.Name, program.Type, program.MapCount); err != nil {
-				return err
-			}
-		}
-	}
-
-	if _, err := fmt.Fprintln(writer, "\nMap occupancy (on-demand; no background scan)"); err != nil {
-		return err
-	}
-	if report.MapOccupancy.Error != "" {
-		if _, err := fmt.Fprintln(writer, "  UNKNOWN:", report.MapOccupancy.Error); err != nil {
-			return err
-		}
-	}
-	if len(report.MapOccupancy.Maps) == 0 && report.MapOccupancy.Error == "" {
-		if _, err := fmt.Fprintln(writer, "  none visible"); err != nil {
-			return err
-		}
-	}
-	for _, item := range report.MapOccupancy.Maps {
-		if item.Supported {
-			if _, err := fmt.Fprintf(writer, "  name=%s id=%d type=%s entries=%d/%d key=%d value=%d flags=0x%x\n", item.Name, item.ID, item.Type, item.Entries, item.MaxEntries, item.KeySize, item.ValueSize, item.Flags); err != nil {
-				return err
-			}
-		} else {
-			if _, err := fmt.Fprintf(writer, "  name=%s id=%d type=%s entries=UNKNOWN/%d (%s)\n", item.Name, item.ID, item.Type, item.MaxEntries, item.Error); err != nil {
-				return err
-			}
-		}
-	}
-
 	counts := report.Counts()
 	if _, err := fmt.Fprintf(writer, "\nSummary: PASS=%d WARN=%d FAIL=%d UNKNOWN=%d REQUIRED_FAILURES=%d REQUIRED_UNKNOWNS=%d\n",
 		counts[KernelProbePass], counts[KernelProbeWarn], counts[KernelProbeFail], counts[KernelProbeUnknown],
@@ -207,7 +123,7 @@ func WriteKernelProbeReport(writer io.Writer, report *KernelProbeReport) error {
 		_, err := fmt.Fprintf(writer, "Result: unsupported for at least one selected data path (%d required check(s) failed).\n", failures)
 		return err
 	}
-	if report.RequiredUnknowns() > 0 || report.ActiveStateErr != nil {
+	if report.RequiredUnknowns() > 0 {
 		_, err := fmt.Fprintln(writer, "Result: required checks are inconclusive; repeat with the service privileges or run a real runtime startup test.")
 		return err
 	}

@@ -564,8 +564,8 @@ func probeBPFJIT(report *KernelProbeReport) {
 		"The kernel reports bpf_jit_enable="+value+".")
 }
 
-func probeActivePrograms() ([]KernelProbeProgram, error) {
-	var programs []KernelProbeProgram
+func probeActivePrograms() ([]RuntimeProgram, error) {
+	var programs []RuntimeProgram
 	var current CiliumEBPF.ProgramID
 	for {
 		next, err := CiliumEBPF.ProgramGetNextID(current)
@@ -592,7 +592,7 @@ func probeActivePrograms() ([]KernelProbeProgram, error) {
 			continue
 		}
 		mapIDs, _ := info.MapIDs()
-		programs = append(programs, KernelProbeProgram{
+		programs = append(programs, RuntimeProgram{
 			ID:       next,
 			Name:     info.Name,
 			Type:     info.Type,

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
-
-	CiliumEBPF "github.com/cilium/ebpf"
 )
 
 type KernelProbeMode string
@@ -121,14 +119,6 @@ type KernelProbeFinding struct {
 	Detail     string                `json:"detail"`
 }
 
-type KernelProbeProgram struct {
-	ID       CiliumEBPF.ProgramID
-	Name     string
-	Type     CiliumEBPF.ProgramType
-	MapCount int
-	MapIDs   []CiliumEBPF.MapID
-}
-
 type KernelProbeReport struct {
 	Platform        string
 	KernelRelease   string
@@ -139,11 +129,7 @@ type KernelProbeReport struct {
 	Network         []string
 	IPv6            bool
 	Findings        []KernelProbeFinding
-	ActivePrograms  []KernelProbeProgram
-	ActiveStateErr  error
 	ExactObjectLoad bool
-	// MapOccupancy is populated only by an explicit diagnostic caller.
-	MapOccupancy MapOccupancyReport
 }
 
 func (r *KernelProbeReport) Add(
@@ -257,7 +243,6 @@ func ProbeKernel(options KernelProbeOptions) (*KernelProbeReport, error) {
 		probeSelectedObjectLoads(report, plan)
 		report.ExactObjectLoad = true
 	}
-	report.ActivePrograms, report.ActiveStateErr = probeActivePrograms()
 	return report, nil
 }
 

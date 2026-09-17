@@ -46,8 +46,9 @@ type (
 	KernelProbeImportance          = core.KernelProbeImportance
 	KernelProbeOptions             = core.KernelProbeOptions
 	KernelProbeFinding             = core.KernelProbeFinding
-	KernelProbeProgram             = core.KernelProbeProgram
 	KernelProbeReport              = core.KernelProbeReport
+	RuntimeProgram                 = core.RuntimeProgram
+	RuntimeState                   = core.RuntimeState
 	MapOccupancy                   = core.MapOccupancy
 	MapOccupancyReport             = core.MapOccupancyReport
 )
@@ -467,6 +468,13 @@ func CompactSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {
 // sing-ebpf. It does not start a background scan or affect active datapaths.
 func InspectMapOccupancy() MapOccupancyReport {
 	return core.InspectMapOccupancy()
+}
+
+// InspectRuntimeState performs a one-shot inspection of active sing-ebpf
+// programs and maps. It does not start a background scan or affect active
+// data paths.
+func InspectRuntimeState() RuntimeState {
+	return core.InspectRuntimeState()
 }
 
 func CompactCgroupMapCapacity() CgroupMapCapacity {

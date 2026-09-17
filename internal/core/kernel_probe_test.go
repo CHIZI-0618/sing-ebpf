@@ -98,9 +98,6 @@ func TestWriteKernelProbeReport(t *testing.T) {
 		Architecture:  "arm64",
 		Mode:          KernelProbeModeLocal,
 		IPv6:          true,
-		MapOccupancy: MapOccupancyReport{Maps: []MapOccupancy{{
-			ID: 7, Name: "sb_test", Type: "Hash", MaxEntries: 64, Entries: 3, Supported: true,
-		}}},
 	}
 	report.Add(KernelProbePass, "common", KernelProbeRequired, "hash map", "available")
 	report.Add(KernelProbeUnknown, "local", KernelProbeRequired, "TC hook", "permission required")
@@ -115,7 +112,6 @@ func TestWriteKernelProbeReport(t *testing.T) {
 		"does not load the exact selected eBPF objects",
 		"PASS",
 		"UNKNOWN",
-		"name=sb_test id=7 type=Hash entries=3/64",
 		"Summary: PASS=1 WARN=0 FAIL=0 UNKNOWN=1 REQUIRED_FAILURES=0 REQUIRED_UNKNOWNS=1",
 	} {
 		if !strings.Contains(output.String(), expected) {
@@ -131,15 +127,6 @@ func TestWriteKernelProbeReportJSON(t *testing.T) {
 		Architecture:  "arm64",
 		Mode:          KernelProbeModeShared,
 		Network:       []string{"tcp", "udp"},
-		ActivePrograms: []KernelProbeProgram{{
-			ID:       42,
-			Name:     "sb_share_in",
-			Type:     CiliumEBPF.SchedCLS,
-			MapCount: 3,
-		}},
-		MapOccupancy: MapOccupancyReport{Maps: []MapOccupancy{{
-			ID: 9, Name: "sb_test", Type: "LRUHash", MaxEntries: 128, Entries: 4, Supported: true,
-		}}},
 	}
 	report.Add(KernelProbePass, "common", KernelProbeRequired, "hash map", "available")
 	report.Add(KernelProbeFail, "shared", KernelProbeRequired, "sched_cls", "unavailable")
@@ -155,25 +142,19 @@ func TestWriteKernelProbeReportJSON(t *testing.T) {
 		Result          string `json:"result"`
 		Preflight       bool   `json:"preflight"`
 		ExactObjectLoad bool   `json:"exact_object_load"`
-		ActivePrograms  []struct {
-			ID   uint32 `json:"id"`
-			Type string `json:"type"`
-		} `json:"active_programs"`
-		MapOccupancy MapOccupancyReport `json:"map_occupancy"`
-		Summary      struct {
+		Summary         struct {
 			RequiredFailures int `json:"required_failures"`
 		} `json:"summary"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded.MapOccupancy.Maps) != 1 || decoded.MapOccupancy.Maps[0].Entries != 4 {
-		t.Fatalf("unexpected map occupancy: %+v", decoded.MapOccupancy)
+	if strings.Contains(output.String(), "active_programs") || strings.Contains(output.String(), "map_occupancy") {
+		t.Fatalf("kernel preflight unexpectedly contains runtime state: %s", output.String())
 	}
 	if decoded.KernelRelease != report.KernelRelease || decoded.Result != "unsupported" ||
 		!decoded.Preflight || decoded.ExactObjectLoad ||
-		decoded.Summary.RequiredFailures != 1 || len(decoded.ActivePrograms) != 1 ||
-		decoded.ActivePrograms[0].ID != 42 || decoded.ActivePrograms[0].Type != CiliumEBPF.SchedCLS.String() {
+		decoded.Summary.RequiredFailures != 1 {
 		t.Fatalf("unexpected JSON report: %+v", decoded)
 	}
 }
