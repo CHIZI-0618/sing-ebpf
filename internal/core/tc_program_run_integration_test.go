@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	CiliumEBPF "github.com/cilium/ebpf"
 )
 
 func TestTCProgramRunIntegration(t *testing.T) {
@@ -317,5 +319,71 @@ func TestTCFragmentPolicyIntegration(t *testing.T) {
 				t.Fatalf("unexpected action: %d != %d", action, testCase.wantAction)
 			}
 		})
+	}
+}
+
+func TestSharedPacketRewriteFragmentPolicyIntegration(t *testing.T) {
+	requireEBPFIntegration(t, "verify shared packet-rewrite fragment policy")
+	backend, err := PrepareSharedPacketRewrite(nil, SharedPacketRewriteConfig{
+		ListenerPort: 65531,
+		EnableTCP:    true,
+		RedirectIPv4: netip.MustParsePrefix("127.128.0.0/9"),
+		RedirectIPv6: netip.MustParsePrefix("fd53:696e:672d:626f::/64"),
+		Policy:       newTestSharedNetworkForceInterceptPolicy(t, "198.18.0.0/15"),
+		MapCapacity:  DefaultSharedPacketRewriteMapCapacity(),
+		UDPTimeout:   time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+	if err = backend.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	ingress := backend.runtime.programs[sharedNetworkProgramIngress]
+	egress := backend.runtime.programs[sharedNetworkProgramEgress]
+	ipv4Ingress := testIPv4TCPPacket(
+		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("198.18.1.1"), 53000, 443,
+	)
+	binary.BigEndian.PutUint16(ipv4Ingress[20:22], 0x2000)
+	ipv4Egress := testIPv4TCPPacket(
+		netip.MustParseAddr("127.128.0.1"), netip.MustParseAddr("192.0.2.10"), 65531, 53000,
+	)
+	binary.BigEndian.PutUint16(ipv4Egress[20:22], 0x2000)
+	moreFragments := uint16(1)
+	ipv6Ingress := testIPv6TCPPacket(
+		netip.MustParseAddr("2001:db8::10"), netip.MustParseAddr("fd00:198:18::1"), 53000, 443, &moreFragments,
+	)
+	ipv6Egress := testIPv6TCPPacket(
+		netip.MustParseAddr("fd53:696e:672d:626f::1"), netip.MustParseAddr("2001:db8::10"), 65531, 53000, &moreFragments,
+	)
+	for _, testCase := range []struct {
+		name    string
+		program *CiliumEBPF.Program
+		packet  []byte
+	}{
+		{"IPv4 ingress fragment", ingress, ipv4Ingress},
+		{"IPv4 egress fragment", egress, ipv4Egress},
+		{"IPv6 ingress fragment", ingress, ipv6Ingress},
+		{"IPv6 egress fragment", egress, ipv6Egress},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			action, _ := runTCProgram(t, testCase.program, testCase.packet)
+			if action != testTCActUnspec {
+				t.Fatalf("fragment was not passed symmetrically: action=%d", action)
+			}
+		})
+	}
+
+	if passes, err := backend.IngressFragmentPasses(); err != nil {
+		t.Fatal(err)
+	} else if passes != 2 {
+		t.Fatalf("ingress fragment passes = %d, want 2", passes)
+	}
+	if passes, err := backend.EgressFragmentPasses(); err != nil {
+		t.Fatal(err)
+	} else if passes != 2 {
+		t.Fatalf("egress fragment passes = %d, want 2", passes)
 	}
 }

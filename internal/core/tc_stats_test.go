@@ -8,7 +8,7 @@ import (
 	CiliumEBPF "github.com/cilium/ebpf"
 )
 
-func TestTCStatsSumsPerCPUErrorCounters(t *testing.T) {
+func TestTCStatsSumsPerCPUCounters(t *testing.T) {
 	statsMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
 		Type:       CiliumEBPF.PerCPUArray,
 		KeySize:    4,
@@ -23,6 +23,11 @@ func TestTCStatsSumsPerCPUErrorCounters(t *testing.T) {
 	perCPU[0] = 2
 	if err := statsMap.Put(tcStatSKAssignFailure, perCPU); err != nil {
 		t.Fatalf("seed TC stats map: %v", err)
+	}
+	fragmentPerCPU := make([]uint64, CiliumEBPF.MustPossibleCPU())
+	fragmentPerCPU[0] = 7
+	if err := statsMap.Put(tcStatLocalFragmentPass, fragmentPerCPU); err != nil {
+		t.Fatalf("seed TC fragment stats map: %v", err)
 	}
 	if len(perCPU) > 1 {
 		perCPU[1] = 3
@@ -42,7 +47,11 @@ func TestTCStatsSumsPerCPUErrorCounters(t *testing.T) {
 	if stats.SKAssignFailures != want {
 		t.Fatalf("SKAssignFailures = %d, want %d", stats.SKAssignFailures, want)
 	}
-	if stats.SocketLookupFailures != 0 || stats.AssignmentUpdateFailures != 0 {
+	if stats.LocalFragmentPasses != 7 {
+		t.Fatalf("LocalFragmentPasses = %d, want 7", stats.LocalFragmentPasses)
+	}
+	if stats.SocketLookupFailures != 0 || stats.AssignmentUpdateFailures != 0 ||
+		stats.SharedFragmentPasses != 0 {
 		t.Fatalf("unexpected counters: %+v", stats)
 	}
 }

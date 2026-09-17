@@ -27,6 +27,7 @@
 #define IPV6_TRANSPORT_MASK 0x1fffU
 #define IPV6_TRANSPORT_BYPASS 0xffffffffU
 #define IPV6_TRANSPORT_DROP 0xfffffffeU
+#define IPV6_TRANSPORT_FRAGMENT 0xfffffffdU
 
 struct sb_lpm4_key {
     __u32 prefixlen;

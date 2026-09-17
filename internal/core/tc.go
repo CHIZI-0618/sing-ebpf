@@ -32,15 +32,20 @@ const (
 	tcStatSocketLookupFailure uint32 = iota
 	tcStatSKAssignFailure
 	tcStatAssignmentUpdateFailure
+	tcStatLocalFragmentPass
+	tcStatSharedFragmentPass
 	tcStatCount
 )
 
-// TCStats contains counters collected only on native TC error paths. Values
-// are cumulative for the lifetime of the backend and are summed across CPUs.
+// TCStats contains counters collected on native TC error and fragment pass
+// paths. Values are cumulative for the lifetime of the backend and are summed
+// across CPUs.
 type TCStats struct {
 	SocketLookupFailures     uint64
 	SKAssignFailures         uint64
 	AssignmentUpdateFailures uint64
+	LocalFragmentPasses      uint64
+	SharedFragmentPasses     uint64
 }
 
 // DefaultTCRoutingMark is used only by standalone backend tests and callers
@@ -623,6 +628,12 @@ func (b *TCBackend) Stats() (TCStats, error) {
 		return TCStats{}, err
 	}
 	if stats.AssignmentUpdateFailures, err = read(tcStatAssignmentUpdateFailure); err != nil {
+		return TCStats{}, err
+	}
+	if stats.LocalFragmentPasses, err = read(tcStatLocalFragmentPass); err != nil {
+		return TCStats{}, err
+	}
+	if stats.SharedFragmentPasses, err = read(tcStatSharedFragmentPass); err != nil {
 		return TCStats{}, err
 	}
 	return stats, nil

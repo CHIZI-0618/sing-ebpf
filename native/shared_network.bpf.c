@@ -88,6 +88,22 @@ INLINE void record_token_reservation_failure(void) {
 INLINE void record_rewrite_failure(void) {
     record_shared_stat(SB_SHARED_STAT_REWRITE_FAILURE);
 }
+INLINE int shared_ingress_pass(void) {
+    record_shared_stat(SB_SHARED_STAT_INGRESS_PASS);
+    return SB_SHARED_ACT_CONTINUE;
+}
+INLINE int shared_egress_pass(void) {
+    record_shared_stat(SB_SHARED_STAT_EGRESS_PASS);
+    return SB_SHARED_ACT_CONTINUE;
+}
+INLINE int shared_ingress_fragment_pass(void) {
+    record_shared_stat(SB_SHARED_STAT_INGRESS_FRAGMENT_PASS);
+    return SB_SHARED_ACT_CONTINUE;
+}
+INLINE int shared_egress_fragment_pass(void) {
+    record_shared_stat(SB_SHARED_STAT_EGRESS_FRAGMENT_PASS);
+    return SB_SHARED_ACT_CONTINUE;
+}
 INLINE void refresh_activity_timestamp(__u64 *last_seen_ns, __u64 now) {
     __u64 previous = *last_seen_ns;
     if (now >= previous &&
@@ -134,11 +150,11 @@ NOINLINE int ingress_ipv4(
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ipv4_header *ip = data + l3_offset;
-    if ((void *)(ip + 1) > data_end || ip->version != 4U || ip->ihl < 5U) return SB_SHARED_ACT_CONTINUE;
-    if (!selected_protocol(ip->protocol, control)) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ip + 1) > data_end || ip->version != 4U || ip->ihl < 5U) return shared_ingress_pass();
+    if (!selected_protocol(ip->protocol, control)) return shared_ingress_pass();
     __u16 fragment = swap16(ip->fragment_offset);
     if ((fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_fragment_pass();
     }
     __u32 header_length = (__u32)ip->ihl * 4U;
     __u32 zero = 0U;
@@ -159,10 +175,10 @@ NOINLINE int ingress_ipv4(
     __builtin_memcpy(scratch->original.client_addr, &ip->source, 4U);
     __builtin_memcpy(scratch->original.original_addr, &ip->destination, 4U);
     if (dhcp_packet(ip->protocol, source_port, destination_port)) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     if (sb_ebpf_ipv4_safety_bypass((const __u8 *)&ip->destination)) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     bool force_intercept = sb_ebpf_force_intercept_ipv4(
         (const __u8 *)&ip->destination,
@@ -174,7 +190,7 @@ NOINLINE int ingress_ipv4(
         ? SB_SHARED_POLICY_PROXY
         : shared_dns_policy(ip->protocol, source_port, destination_port, control);
     if (dns_policy == SB_SHARED_POLICY_BYPASS) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     bool respect_source = dns_policy == SB_SHARED_POLICY_RESPECT_SOURCE;
     bool cached = load_cached_token(scratch);
@@ -182,19 +198,19 @@ NOINLINE int ingress_ipv4(
         __u32 tcp_sequence = 0U;
         bool initial_syn = initial_tcp_syn(ip->protocol, ports, data_end, &tcp_sequence);
         if (!respect_source && load_cached_bypass(scratch, control, ip->protocol, initial_syn, tcp_sequence)) {
-            return SB_SHARED_ACT_CONTINUE;
+            return shared_ingress_pass();
         }
         if (!ipv4_client_selected(
                 scratch->source_mac.address,
                 (const __u8 *)&ip->source,
                 control)) {
             cache_bypass(scratch, ip->protocol, tcp_sequence);
-            return SB_SHARED_ACT_CONTINUE;
+            return shared_ingress_pass();
         }
         if (!respect_source) {
             if (shared_port_bypassed(ip->protocol, destination_port)) {
                 cache_bypass(scratch, ip->protocol, tcp_sequence);
-                return SB_SHARED_ACT_CONTINUE;
+                return shared_ingress_pass();
             }
             __u8 policy = ipv4_policy(
                 (const __u8 *)&ip->destination,
@@ -206,7 +222,7 @@ NOINLINE int ingress_ipv4(
                 if (policy == SB_SHARED_POLICY_CACHE_BYPASS) {
                     cache_bypass(scratch, ip->protocol, tcp_sequence);
                 }
-                return SB_SHARED_ACT_CONTINUE;
+                return shared_ingress_pass();
             }
         }
     }
@@ -219,9 +235,11 @@ NOINLINE int ingress_ipv4(
         return TC_ACT_SHOT;
     }
     fragment = swap16(ip->fragment_offset);
-    if (!selected_protocol(ip->protocol, control) ||
-        (fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
+    if (!selected_protocol(ip->protocol, control)) {
         return TC_ACT_SHOT;
+    }
+    if ((fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
+        return shared_ingress_fragment_pass();
     }
     header_length = (__u32)ip->ihl * 4U;
     ports = (void *)ip + header_length;
@@ -253,12 +271,12 @@ NOINLINE int egress_ipv4(
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ipv4_header *ip = data + l3_offset;
-    if ((void *)(ip + 1) > data_end || ip->version != 4U || ip->ihl < 5U) return SB_SHARED_ACT_CONTINUE;
-    if (!ipv4_token_address(ip->source, control)) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ip + 1) > data_end || ip->version != 4U || ip->ihl < 5U) return shared_egress_pass();
+    if (!ipv4_token_address(ip->source, control)) return shared_egress_pass();
     if (!selected_protocol(ip->protocol, control)) return TC_ACT_SHOT;
     __u16 fragment = swap16(ip->fragment_offset);
     if ((fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
-        return TC_ACT_SHOT;
+        return shared_egress_fragment_pass();
     }
     __u32 header_length = (__u32)ip->ihl * 4U;
     __u32 zero = 0U;
@@ -266,7 +284,7 @@ NOINLINE int egress_ipv4(
     if (scratch == 0) return TC_ACT_SHOT;
     struct transport_ports *ports = (void *)ip + header_length;
     if ((void *)(ports + 1) > data_end) return TC_ACT_SHOT;
-    if (swap16(ports->source) != control->listener_port) return SB_SHARED_ACT_CONTINUE;
+    if (swap16(ports->source) != control->listener_port) return shared_egress_pass();
 
     if (skb_pull_data(skb, 0U) != 0) return TC_ACT_SHOT;
     data = (void *)(long)skb->data;
@@ -277,9 +295,11 @@ NOINLINE int egress_ipv4(
         return TC_ACT_SHOT;
     }
     fragment = swap16(ip->fragment_offset);
-    if (!selected_protocol(ip->protocol, control) ||
-        (fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
+    if (!selected_protocol(ip->protocol, control)) {
         return TC_ACT_SHOT;
+    }
+    if ((fragment & (IPV4_FRAGMENT_OFFSET_MASK | IPV4_FRAGMENT_MORE)) != 0U) {
+        return shared_egress_fragment_pass();
     }
     header_length = (__u32)ip->ihl * 4U;
     ports = (void *)ip + header_length;
@@ -341,7 +361,7 @@ NOINLINE __u64 ipv6_transport_offset(
             protocol = fragment->next_header;
             __u16 fragment_offset = swap16(fragment->fragment_offset);
             if ((fragment_offset & (IPV6_FRAGMENT_OFFSET_MASK | IPV6_FRAGMENT_MORE)) != 0U) {
-                result = IPV6_TRANSPORT_BYPASS;
+                result = IPV6_TRANSPORT_FRAGMENT;
                 continue;
             }
             if (protocol != IPPROTO_TCP_VALUE && protocol != IPPROTO_UDP_VALUE) {
@@ -384,7 +404,7 @@ NOINLINE int ingress_ipv6(
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ipv6_header *ip = data + l3_offset;
-    if ((void *)(ip + 1) > data_end || (swap32(ip->version_flow) >> 28U) != 6U) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ip + 1) > data_end || (swap32(ip->version_flow) >> 28U) != 6U) return shared_ingress_pass();
     __u8 protocol = 0U;
     __u64 transport_result = ipv6_transport_offset(
         data,
@@ -393,13 +413,14 @@ NOINLINE int ingress_ipv6(
         &protocol);
     __u32 transport = (__u32)transport_result;
     if (transport == IPV6_TRANSPORT_DROP) return TC_ACT_SHOT;
-    if (transport == IPV6_TRANSPORT_BYPASS) return SB_SHARED_ACT_CONTINUE;
+    if (transport == IPV6_TRANSPORT_BYPASS) return shared_ingress_pass();
+    if (transport == IPV6_TRANSPORT_FRAGMENT) return shared_ingress_fragment_pass();
     if ((transport & IPV6_TRANSPORT_MASK) < IPV6_TRANSPORT_MIN_OFFSET ||
         (transport & IPV6_TRANSPORT_MASK) > IPV6_TRANSPORT_MAX_OFFSET) {
         return TC_ACT_SHOT;
     }
     transport &= IPV6_TRANSPORT_MASK;
-    if (!selected_protocol(protocol, control)) return SB_SHARED_ACT_CONTINUE;
+    if (!selected_protocol(protocol, control)) return shared_ingress_pass();
     __u32 zero = 0U;
     struct sb_shared_scratch *scratch = map_lookup(&shared_scratch, &zero);
     if (scratch == 0) return TC_ACT_SHOT;
@@ -420,10 +441,10 @@ NOINLINE int ingress_ipv6(
     copy_address(scratch->original.client_addr, ip->source, 16U);
     copy_address(scratch->original.original_addr, ip->destination, 16U);
     if (dhcp_packet(protocol, source_port, destination_port)) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     if (sb_ebpf_ipv6_safety_bypass(ip->destination)) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     bool force_intercept = sb_ebpf_force_intercept_ipv6(
         ip->destination,
@@ -435,7 +456,7 @@ NOINLINE int ingress_ipv6(
         ? SB_SHARED_POLICY_PROXY
         : shared_dns_policy(protocol, source_port, destination_port, control);
     if (dns_policy == SB_SHARED_POLICY_BYPASS) {
-        return SB_SHARED_ACT_CONTINUE;
+        return shared_ingress_pass();
     }
     bool respect_source = dns_policy == SB_SHARED_POLICY_RESPECT_SOURCE;
     bool cached = load_cached_token(scratch);
@@ -443,16 +464,16 @@ NOINLINE int ingress_ipv6(
         __u32 tcp_sequence = 0U;
         bool initial_syn = initial_tcp_syn(protocol, ports, data_end, &tcp_sequence);
         if (!respect_source && load_cached_bypass(scratch, control, protocol, initial_syn, tcp_sequence)) {
-            return SB_SHARED_ACT_CONTINUE;
+            return shared_ingress_pass();
         }
         if (!ipv6_client_selected(scratch->source_mac.address, ip->source, control)) {
             cache_bypass(scratch, protocol, tcp_sequence);
-            return SB_SHARED_ACT_CONTINUE;
+            return shared_ingress_pass();
         }
         if (!respect_source) {
             if (shared_port_bypassed(protocol, destination_port)) {
                 cache_bypass(scratch, protocol, tcp_sequence);
-                return SB_SHARED_ACT_CONTINUE;
+                return shared_ingress_pass();
             }
             __u8 policy = ipv6_policy(
                 ip->destination,
@@ -464,7 +485,7 @@ NOINLINE int ingress_ipv6(
                 if (policy == SB_SHARED_POLICY_CACHE_BYPASS) {
                     cache_bypass(scratch, protocol, tcp_sequence);
                 }
-                return SB_SHARED_ACT_CONTINUE;
+                return shared_ingress_pass();
             }
         }
     }
@@ -483,6 +504,8 @@ NOINLINE int ingress_ipv6(
         l3_offset,
         &protocol);
     transport = (__u32)transport_result;
+    if (transport == IPV6_TRANSPORT_BYPASS) return TC_ACT_SHOT;
+    if (transport == IPV6_TRANSPORT_FRAGMENT) return shared_ingress_fragment_pass();
     if ((transport & IPV6_TRANSPORT_MASK) < IPV6_TRANSPORT_MIN_OFFSET ||
         (transport & IPV6_TRANSPORT_MASK) > IPV6_TRANSPORT_MAX_OFFSET) {
         return TC_ACT_SHOT;
@@ -518,8 +541,8 @@ NOINLINE int egress_ipv6(
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ipv6_header *ip = data + l3_offset;
-    if ((void *)(ip + 1) > data_end || (swap32(ip->version_flow) >> 28U) != 6U) return SB_SHARED_ACT_CONTINUE;
-    if (!ipv6_token_address(ip->source, control)) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ip + 1) > data_end || (swap32(ip->version_flow) >> 28U) != 6U) return shared_egress_pass();
+    if (!ipv6_token_address(ip->source, control)) return shared_egress_pass();
     __u8 protocol = 0U;
     __u64 transport_result = ipv6_transport_offset(
         data,
@@ -528,6 +551,7 @@ NOINLINE int egress_ipv6(
         &protocol);
     __u32 transport = (__u32)transport_result;
     if (transport == IPV6_TRANSPORT_BYPASS) return TC_ACT_SHOT;
+    if (transport == IPV6_TRANSPORT_FRAGMENT) return shared_egress_fragment_pass();
     if ((transport & IPV6_TRANSPORT_MASK) < IPV6_TRANSPORT_MIN_OFFSET ||
         (transport & IPV6_TRANSPORT_MASK) > IPV6_TRANSPORT_MAX_OFFSET) {
         return TC_ACT_SHOT;
@@ -540,7 +564,7 @@ NOINLINE int egress_ipv6(
     struct transport_ports *ports = data + transport;
     if ((void *)(ports + 1) > data_end) return TC_ACT_SHOT;
     __be16 source_port_raw = ports->source;
-    if (swap16(source_port_raw) != control->listener_port) return SB_SHARED_ACT_CONTINUE;
+    if (swap16(source_port_raw) != control->listener_port) return shared_egress_pass();
 
     if (skb_pull_data(skb, 0U) != 0) return TC_ACT_SHOT;
     data = (void *)(long)skb->data;
@@ -558,6 +582,8 @@ NOINLINE int egress_ipv6(
         l3_offset,
         &protocol);
     transport = (__u32)transport_result;
+    if (transport == IPV6_TRANSPORT_BYPASS) return TC_ACT_SHOT;
+    if (transport == IPV6_TRANSPORT_FRAGMENT) return shared_egress_fragment_pass();
     if ((transport & IPV6_TRANSPORT_MASK) < IPV6_TRANSPORT_MIN_OFFSET ||
         (transport & IPV6_TRANSPORT_MASK) > IPV6_TRANSPORT_MAX_OFFSET) {
         return TC_ACT_SHOT;
@@ -601,18 +627,18 @@ NOINLINE int egress_ipv6(
 NOINLINE int classify_ingress(struct __sk_buff *skb) {
     __u32 zero = 0U;
     struct sb_shared_control *control = map_lookup(&shared_control, &zero);
-    if (control == 0 || control->enabled == 0U) return SB_SHARED_ACT_CONTINUE;
+    if (control == 0 || control->enabled == 0U) return shared_ingress_pass();
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ethernet_header *ethernet = data;
-    if ((void *)(ethernet + 1) > data_end) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ethernet + 1) > data_end) return shared_ingress_pass();
     __u16 protocol = swap16(ethernet->protocol);
     __u32 l3_offset = sizeof(*ethernet);
 #pragma clang loop unroll(full)
     for (__u32 depth = 0U; depth < 2U; ++depth) {
         if (protocol != ETH_P_8021Q_VALUE && protocol != ETH_P_8021AD_VALUE) break;
         struct vlan_header *vlan = data + l3_offset;
-        if ((void *)(vlan + 1) > data_end) return SB_SHARED_ACT_CONTINUE;
+        if ((void *)(vlan + 1) > data_end) return shared_ingress_pass();
         protocol = swap16(vlan->protocol);
         l3_offset += sizeof(*vlan);
     }
@@ -626,24 +652,24 @@ NOINLINE int classify_ingress(struct __sk_buff *skb) {
     if (protocol == ETH_P_IPV6_VALUE && (control->flags & SB_SHARED_FLAG_IPV6) != 0U) {
         return ingress_ipv6(skb, l3_offset, control, source_mac_first, source_mac_last);
     }
-    return SB_SHARED_ACT_CONTINUE;
+    return shared_ingress_pass();
 }
 
 NOINLINE int classify_egress(struct __sk_buff *skb) {
     __u32 zero = 0U;
     struct sb_shared_control *control = map_lookup(&shared_control, &zero);
-    if (control == 0 || control->enabled == 0U) return SB_SHARED_ACT_CONTINUE;
+    if (control == 0 || control->enabled == 0U) return shared_egress_pass();
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ethernet_header *ethernet = data;
-    if ((void *)(ethernet + 1) > data_end) return SB_SHARED_ACT_CONTINUE;
+    if ((void *)(ethernet + 1) > data_end) return shared_egress_pass();
     __u16 protocol = swap16(ethernet->protocol);
     __u32 l3_offset = sizeof(*ethernet);
 #pragma clang loop unroll(full)
     for (__u32 depth = 0U; depth < 2U; ++depth) {
         if (protocol != ETH_P_8021Q_VALUE && protocol != ETH_P_8021AD_VALUE) break;
         struct vlan_header *vlan = data + l3_offset;
-        if ((void *)(vlan + 1) > data_end) return SB_SHARED_ACT_CONTINUE;
+        if ((void *)(vlan + 1) > data_end) return shared_egress_pass();
         protocol = swap16(vlan->protocol);
         l3_offset += sizeof(*vlan);
     }
@@ -653,7 +679,7 @@ NOINLINE int classify_egress(struct __sk_buff *skb) {
     if (protocol == ETH_P_IPV6_VALUE && (control->flags & SB_SHARED_FLAG_IPV6) != 0U) {
         return egress_ipv6(skb, l3_offset, control);
     }
-    return SB_SHARED_ACT_CONTINUE;
+    return shared_egress_pass();
 }
 
 

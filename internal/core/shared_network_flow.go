@@ -605,15 +605,18 @@ func deleteMapIfExists(mapFD int, key unsafe.Pointer) error {
 	return err
 }
 
-// sharedNetworkStatCount mirrors native/shared_network.h's SB_SHARED_STAT_COUNT;
-// the two indices below mirror SB_SHARED_STAT_TOKEN_RESERVATION_FAILURE and
-// SB_SHARED_STAT_REWRITE_FAILURE. There is no generated binding for either
-// side's constants, so this comment is the ABI contract between them.
-const sharedNetworkStatCount = 2
+// sharedNetworkStatCount mirrors native/shared_network.h's SB_SHARED_STAT_COUNT.
+// The indices below are the ABI contract with the generated shared-network
+// object; keep them in lockstep with the native definitions.
+const sharedNetworkStatCount = 6
 
 const (
 	sharedNetworkStatTokenReservationFailure uint32 = 0
 	sharedNetworkStatRewriteFailure          uint32 = 1
+	sharedNetworkStatIngressPass             uint32 = 2
+	sharedNetworkStatEgressPass              uint32 = 3
+	sharedNetworkStatIngressFragmentPass     uint32 = 4
+	sharedNetworkStatEgressFragmentPass      uint32 = 5
 )
 
 func (b *SharedPacketRewriteBackend) TokenReservationFailures() (uint64, error) {
@@ -626,6 +629,30 @@ func (b *SharedPacketRewriteBackend) TokenReservationFailures() (uint64, error) 
 // opposed to one this backend's Go side ever decided to drop.
 func (b *SharedPacketRewriteBackend) RewriteFailures() (uint64, error) {
 	return b.sharedStat(sharedNetworkStatRewriteFailure)
+}
+
+// IngressPasses reports packets that the shared ingress program deliberately
+// left to later TC programs. This includes policy bypasses and unsupported
+// traffic; it is sampled from a per-CPU native counter on status queries.
+func (b *SharedPacketRewriteBackend) IngressPasses() (uint64, error) {
+	return b.sharedStat(sharedNetworkStatIngressPass)
+}
+
+// EgressPasses reports packets that the shared egress program deliberately
+// left untouched, such as traffic that does not belong to a proxy token flow.
+func (b *SharedPacketRewriteBackend) EgressPasses() (uint64, error) {
+	return b.sharedStat(sharedNetworkStatEgressPass)
+}
+
+// IngressFragmentPasses reports fragments left untouched because they cannot
+// safely carry a complete TCP/UDP tuple at this hook.
+func (b *SharedPacketRewriteBackend) IngressFragmentPasses() (uint64, error) {
+	return b.sharedStat(sharedNetworkStatIngressFragmentPass)
+}
+
+// EgressFragmentPasses reports fragments left untouched on the reply path.
+func (b *SharedPacketRewriteBackend) EgressFragmentPasses() (uint64, error) {
+	return b.sharedStat(sharedNetworkStatEgressFragmentPass)
 }
 
 func (b *SharedPacketRewriteBackend) sharedStat(index uint32) (uint64, error) {
