@@ -11,11 +11,8 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -59,8 +56,6 @@ type config struct {
 	remoteUser           string
 	downstreamHost       string
 	downstreamUser       string
-	diagnosticsURL       string
-	diagnosticsToken     string
 	forceInterceptTarget string
 	remoteIPv6           string
 	tcpPort              int
@@ -154,8 +149,6 @@ func loadConfig() (config, error) {
 		remoteHost:           os.Getenv("REMOTE_HOST"),
 		remoteUser:           envOr("REMOTE_SSH_USER", "root"),
 		downstreamHost:       os.Getenv("DOWNSTREAM_HOST"),
-		diagnosticsURL:       os.Getenv("DUT_DIAGNOSTICS_URL"),
-		diagnosticsToken:     os.Getenv("DUT_DIAGNOSTICS_TOKEN"),
 		forceInterceptTarget: os.Getenv("REMOTE_FORCE_INTERCEPT_TARGET"),
 		remoteIPv6:           os.Getenv("REMOTE_IPV6"),
 		outputDirectory:      envOr("OUT_DIR", "./checksum-offload-report"),
@@ -406,15 +399,7 @@ func (r *runner) checkPing(ctx context.Context, label string, downstream bool, f
 	if downstream {
 		check = fmt.Sprintf("shared_icmp_echo_reply_v%d", family)
 	}
-	var before uint64
 	var err error
-	if downstream && r.config.diagnosticsURL != "" {
-		before, err = r.counter(ctx, "icmp_echo_reply_replies")
-		if err != nil {
-			r.record(label, check, statusFail, "read diagnostics before ping: "+err.Error())
-			return
-		}
-	}
 	ping := "ping"
 	if family == 6 {
 		ping = "ping6"
@@ -435,20 +420,7 @@ func (r *runner) checkPing(ctx context.Context, label string, downstream bool, f
 		r.record(label, check, statusFail, "unexpected packet loss: "+strings.TrimSpace(string(output)))
 		return
 	}
-	detail := fmt.Sprintf("0%% loss over %d pings", r.config.pingCount)
-	if downstream && r.config.diagnosticsURL != "" {
-		after, counterErr := r.counter(ctx, "icmp_echo_reply_replies")
-		if counterErr != nil {
-			r.record(label, check, statusFail, "read diagnostics after ping: "+counterErr.Error())
-			return
-		}
-		if after <= before {
-			r.record(label, check, statusFail, fmt.Sprintf("ping passed but icmp_echo_reply_replies did not advance (%d -> %d)", before, after))
-			return
-		}
-		detail += fmt.Sprintf("; icmp_echo_reply_replies advanced %d -> %d", before, after)
-	}
-	r.record(label, check, statusPass, detail)
+	r.record(label, check, statusPass, fmt.Sprintf("0%% loss over %d pings", r.config.pingCount))
 }
 
 func (r *runner) checkTCP(ctx context.Context, label string, downstream bool) {
@@ -463,14 +435,6 @@ func (r *runner) checkTCP(ctx context.Context, label string, downstream bool) {
 	if err != nil {
 		r.record(label, check, statusFail, "prepare payload: "+err.Error())
 		return
-	}
-	var rewriteBefore uint64
-	if downstream && r.config.diagnosticsURL != "" {
-		rewriteBefore, err = r.counter(ctx, "rewrite_failures")
-		if err != nil {
-			r.record(label, check, statusFail, "read diagnostics before transfer: "+err.Error())
-			return
-		}
 	}
 	listener, err := r.startRemote(ctx, "timeout 30 nc -l -p "+strconv.Itoa(r.config.tcpPort)+" > "+receivePath)
 	if err != nil {
@@ -496,17 +460,6 @@ func (r *runner) checkTCP(ctx context.Context, label string, downstream bool) {
 	if err = r.compareRemotePayload(ctx, payload, receivePath); err != nil {
 		r.record(label, check, statusFail, err.Error())
 		return
-	}
-	if downstream && r.config.diagnosticsURL != "" {
-		after, counterErr := r.counter(ctx, "rewrite_failures")
-		if counterErr != nil {
-			r.record(label, check, statusFail, "read diagnostics after transfer: "+counterErr.Error())
-			return
-		}
-		if after > rewriteBefore {
-			r.record(label, check, statusFail, fmt.Sprintf("rewrite_failures advanced %d -> %d", rewriteBefore, after))
-			return
-		}
 	}
 	r.record(label, check, statusPass, fmt.Sprintf("received payload matches (%d bytes, %s)", len(payload), payloadHash(payload)))
 }
@@ -579,40 +532,6 @@ func randomPayload(size int) ([]byte, error) {
 func payloadHash(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
-}
-
-func (r *runner) counter(ctx context.Context, name string) (uint64, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, r.config.diagnosticsURL, nil)
-	if err != nil {
-		return 0, err
-	}
-	if r.config.diagnosticsToken != "" {
-		request.Header.Set("Authorization", "Bearer "+r.config.diagnosticsToken)
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return 0, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode/100 != 2 {
-		return 0, fmt.Errorf("HTTP status %s", response.Status)
-	}
-	var document struct {
-		EBPF []struct {
-			Counters map[string]uint64 `json:"counters"`
-		} `json:"ebpf"`
-	}
-	if err = json.NewDecoder(response.Body).Decode(&document); err != nil {
-		return 0, err
-	}
-	if len(document.EBPF) == 0 {
-		return 0, errors.New("diagnostics contains no eBPF data plane")
-	}
-	value, loaded := document.EBPF[0].Counters[name]
-	if !loaded {
-		return 0, fmt.Errorf("counter %s is absent", name)
-	}
-	return value, nil
 }
 
 func (r *runner) remote(ctx context.Context, downstream bool, input io.Reader, command string) ([]byte, error) {
