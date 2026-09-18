@@ -153,6 +153,23 @@ reconciliation transaction and must not call back into the runtime.
 
 ## Test layers
 
+Keep each test tied to a current contract. Delete a test and its fixtures when
+the production path it protects is removed, or when another test exercises the
+same preconditions and assertions at the same layer. Do not retain tests merely
+to prevent a deleted implementation from returning.
+
+Conversely, rarity is not a reason to remove rollback, detach-failure,
+resource-ownership, concurrency, verifier, ABI, or compatibility-fallback
+tests. Prefer one table-driven family/framing/data-plane matrix to parallel
+wrappers, and keep implementation-shape assertions only where the shape itself
+is contractual, such as helper usage or C/Go ABI layout.
+
+Tests that require root, network namespaces, real maps/programs, or kernel
+attachment must use the `ebpf_integration` build tag. Ordinary unit tests should
+not attempt a privileged operation and silently skip; this keeps the default
+suite deterministic while the privileged CI remains authoritative for real
+kernel behavior.
+
 ### Unit, race, vet, and generation
 
 Run the ordinary Go commands above plus `make check`. Tests should cover the
