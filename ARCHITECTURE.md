@@ -20,6 +20,24 @@ It must not depend on `github.com/sagernet/sing-box`, `sing-tun`, a fork of
 Consumers depend on this module in one direction and remain responsible for
 interpreting their own configuration and route rules.
 
+## Data-plane ownership matrix
+
+| Path | Root package owns | `runtime` owns | Consumer owns |
+| --- | --- | --- | --- |
+| local cgroup | object selection, token/original maps, redirect routes, cgroup links, release cleanup | none | listeners, accepted TCP metadata, UDP NAT/session state, UID/package policy |
+| local TC | programs/maps, policy compiler, listeners, assignments, cookie self-bypass | default-interface attachment, delivery veth, policy routing, sysctls, reconciliation | listener/session handling, process metadata, interface events, diagnostics presentation |
+| shared socket assignment | programs/maps, assignments, source policy | downstream attachment, policy routing, reconciliation | listeners, shared-source metadata, TCP/UDP handling |
+| shared packet rewrite | rewrite programs/maps, flow lookup/update and counters | downstream attachment, `route_localnet`, health and rollback | token listeners, userspace flow lifecycle, policy translation, warning presentation |
+
+The consumer may combine one local and one shared choice. A path disabled by
+the consumer must not load its object, attach a hook, create a route, start a
+worker, or change a sysctl. No library package may interpret FakeIP mappings,
+route-rule objects, package names, or a consumer's API schema.
+
+Force-intercept prefixes are deliberately generic. They allow a consumer to
+give selected destinations precedence over ordinary bypass policy without the
+library learning why those prefixes are special.
+
 ## Atomic ownership units
 
 Keep the root package, `runtime/`, `native/`, `internal/bpfgen/`, the generation

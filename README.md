@@ -14,6 +14,8 @@ prefixes and never reads or maintains an application's address mappings.
 
 The API is currently experimental. Architecture, dependency policy, and
 lifecycle invariants are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+Build, generation, testing, debugging, and contribution procedures are in
+[DEVELOPING.md](DEVELOPING.md).
 
 ## Package boundary
 
@@ -256,6 +258,10 @@ detaches each selected backend and removes only routes owned by that instance. A
 disabled path does not load its object or create network state.
 
 ## Building, generation, and tests
+
+This section is the short path for consumers. Developers changing the BPF C,
+Go/C ABI, loaders, capability selection, or lifecycle code must also follow the
+full [development guide](DEVELOPING.md).
 
 The Go packages require Linux or Android and the `with_ebpf` build tag. Normal
 builds use the checked-in generated objects and do not require cgo, bpftool,
