@@ -208,7 +208,7 @@ func (b *CgroupBackend) Attach() error {
 		}
 		if err != nil {
 			_ = b.detachProgramsLocked()
-			return eBPFBackendOperationError("attach eBPF cgroup programs", cgroupProgramDefinitions[slot].name, err)
+			return eBPFBackendOperationError("attach eBPF cgroup programs", cgroupProgramDefinitions[slot].kernelProgramName, err)
 		}
 		b.runtime.attached[slot] = true
 	}

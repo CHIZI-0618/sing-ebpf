@@ -603,7 +603,7 @@ func probeActivePrograms() ([]RuntimeProgram, error) {
 }
 
 func isSingEBPFProgramName(name string) bool {
-	for _, prefix := range []string{"sb_tc_", "sb_ebpf_", "sb_share_", "sb_self_", "sb_proc_"} {
+	for _, prefix := range []string{"sb_tc_", "sb_ebpf_", "sb_share_", "sb_icmp_", "sb_self_", "sb_proc_"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

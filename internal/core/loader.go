@@ -73,8 +73,8 @@ func verifierErrorStage(err error) string {
 }
 
 type programSelection struct {
-	section string
-	name    string
+	section           string
+	kernelProgramName string
 }
 
 type mapSpecOverride struct {
@@ -159,7 +159,7 @@ func loadObjectProgramsWithOptions(
 		if program.Type == CiliumEBPF.UnspecifiedProgram {
 			return nil, E.New("eBPF program section has unknown type: ", program.SectionName)
 		}
-		program.Name = selections[index].name
+		program.Name = selections[index].kernelProgramName
 		programSymbols[index] = symbol
 	}
 	for index, symbol := range programSymbols {

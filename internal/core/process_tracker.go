@@ -43,8 +43,9 @@ type ProcessSocketOwner struct {
 }
 
 type processTrackerHook struct {
-	name       string
-	attachType CiliumEBPF.AttachType
+	hookName          string
+	kernelProgramName string
+	attachType        CiliumEBPF.AttachType
 }
 
 // ProcessTracker records the process performing connect or UDP sendmsg for a
@@ -127,7 +128,7 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 		tracker.programs = append(tracker.programs, program)
 		programLink, attachErr := attachCgroupProgram(cgroupPath, program, hook.attachType)
 		if attachErr != nil {
-			return rollbackProcessTracker(tracker, E.Cause(attachErr, "attach eBPF process tracker ", hook.name, " hook"))
+			return rollbackProcessTracker(tracker, E.Cause(attachErr, "attach eBPF process tracker ", hook.hookName, " hook"))
 		}
 		tracker.links = append(tracker.links, programLink)
 	}
@@ -171,15 +172,15 @@ func (t *ProcessTracker) ReleaseCleanup() bool {
 func processTrackerHooks(config ProcessTrackerConfig) []processTrackerHook {
 	var hooks []processTrackerHook
 	if config.EnableTCP {
-		hooks = append(hooks, processTrackerHook{"connect4", CiliumEBPF.AttachCGroupInet4Connect})
+		hooks = append(hooks, processTrackerHook{"connect4", kernelProgramNameProcessConnect4, CiliumEBPF.AttachCGroupInet4Connect})
 		if config.EnableIPv6 {
-			hooks = append(hooks, processTrackerHook{"connect6", CiliumEBPF.AttachCGroupInet6Connect})
+			hooks = append(hooks, processTrackerHook{"connect6", kernelProgramNameProcessConnect6, CiliumEBPF.AttachCGroupInet6Connect})
 		}
 	}
 	if config.EnableUDP {
-		hooks = append(hooks, processTrackerHook{"sendmsg4", CiliumEBPF.AttachCGroupUDP4Sendmsg})
+		hooks = append(hooks, processTrackerHook{"sendmsg4", kernelProgramNameProcessSendmsg4, CiliumEBPF.AttachCGroupUDP4Sendmsg})
 		if config.EnableIPv6 {
-			hooks = append(hooks, processTrackerHook{"sendmsg6", CiliumEBPF.AttachCGroupUDP6Sendmsg})
+			hooks = append(hooks, processTrackerHook{"sendmsg6", kernelProgramNameProcessSendmsg6, CiliumEBPF.AttachCGroupUDP6Sendmsg})
 		}
 	}
 	return hooks
@@ -187,21 +188,21 @@ func processTrackerHooks(config ProcessTrackerConfig) []processTrackerHook {
 
 func newProcessTrackerProgram(hook processTrackerHook, ownerMapFD, policyUIDMapFD, metadataMapFD int, defaultBypass bool) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:         "sb_proc_" + hook.name,
+		Name:         hook.kernelProgramName,
 		Type:         CiliumEBPF.CGroupSockAddr,
 		AttachType:   hook.attachType,
 		License:      "GPL",
 		Instructions: processTrackerInstructions(ownerMapFD, policyUIDMapFD, metadataMapFD, defaultBypass),
 	})
 	if err != nil {
-		return nil, E.Cause(err, "load eBPF process tracker ", hook.name, " hook")
+		return nil, E.Cause(err, "load eBPF process tracker ", hook.hookName, " hook")
 	}
 	return program, nil
 }
 
 func newProcessTrackerReleaseProgram(ownerMapFD int) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:         "sb_proc_release",
+		Name:         kernelProgramNameProcessRelease,
 		Type:         CiliumEBPF.CGroupSock,
 		AttachType:   CiliumEBPF.AttachCgroupInetSockRelease,
 		License:      "GPL",

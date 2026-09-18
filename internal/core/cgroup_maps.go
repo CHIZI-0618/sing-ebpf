@@ -208,7 +208,7 @@ func validateCgroupUDPCleanupMaps(runtimeState *cgroupRuntime) error {
 
 func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:       "sb_rel_probe",
+		Name:       kernelProgramNameReleaseProbe,
 		Type:       CiliumEBPF.CGroupSock,
 		AttachType: CiliumEBPF.AttachCgroupInetSockRelease,
 		License:    "GPL",

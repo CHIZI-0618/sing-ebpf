@@ -199,7 +199,7 @@ func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroup
 		programs = append(programs, program)
 		programLink, err := attachCgroupProgram(path, program, hook.attachType)
 		if err != nil {
-			return E.Errors(E.Cause(err, "attach eBPF self-bypass ", hook.name, " hook"), closeAttached())
+			return E.Errors(E.Cause(err, "attach eBPF self-bypass ", hook.hookName, " hook"), closeAttached())
 		}
 		links = append(links, programLink)
 	}
@@ -209,22 +209,23 @@ func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroup
 }
 
 type selfBypassSocketAddrHook struct {
-	name       string
-	attachType CiliumEBPF.AttachType
+	hookName          string
+	kernelProgramName string
+	attachType        CiliumEBPF.AttachType
 }
 
 func selfBypassSocketAddrHooks(config SelfBypassCgroupConfig) []selfBypassSocketAddrHook {
 	hooks := make([]selfBypassSocketAddrHook, 0, 4)
 	if config.EnableTCP {
-		hooks = append(hooks, selfBypassSocketAddrHook{"connect4", CiliumEBPF.AttachCGroupInet4Connect})
+		hooks = append(hooks, selfBypassSocketAddrHook{"connect4", kernelProgramNameSelfConnect4, CiliumEBPF.AttachCGroupInet4Connect})
 		if config.EnableIPv6 {
-			hooks = append(hooks, selfBypassSocketAddrHook{"connect6", CiliumEBPF.AttachCGroupInet6Connect})
+			hooks = append(hooks, selfBypassSocketAddrHook{"connect6", kernelProgramNameSelfConnect6, CiliumEBPF.AttachCGroupInet6Connect})
 		}
 	}
 	if config.EnableUDP {
-		hooks = append(hooks, selfBypassSocketAddrHook{"sendmsg4", CiliumEBPF.AttachCGroupUDP4Sendmsg})
+		hooks = append(hooks, selfBypassSocketAddrHook{"sendmsg4", kernelProgramNameSelfSendmsg4, CiliumEBPF.AttachCGroupUDP4Sendmsg})
 		if config.EnableIPv6 {
-			hooks = append(hooks, selfBypassSocketAddrHook{"sendmsg6", CiliumEBPF.AttachCGroupUDP6Sendmsg})
+			hooks = append(hooks, selfBypassSocketAddrHook{"sendmsg6", kernelProgramNameSelfSendmsg6, CiliumEBPF.AttachCGroupUDP6Sendmsg})
 		}
 	}
 	return hooks
@@ -232,7 +233,7 @@ func selfBypassSocketAddrHooks(config SelfBypassCgroupConfig) []selfBypassSocket
 
 func newSelfBypassCreateProgram(mapFD int) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:         "sb_self_create",
+		Name:         kernelProgramNameSelfCreate,
 		Type:         CiliumEBPF.CGroupSock,
 		AttachType:   CiliumEBPF.AttachCGroupInetSockCreate,
 		License:      "GPL",
@@ -246,7 +247,7 @@ func newSelfBypassCreateProgram(mapFD int) (*CiliumEBPF.Program, error) {
 
 func newSelfBypassReleaseProgram(mapFD int) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:         "sb_self_release",
+		Name:         kernelProgramNameSelfRelease,
 		Type:         CiliumEBPF.CGroupSock,
 		AttachType:   CiliumEBPF.AttachCgroupInetSockRelease,
 		License:      "GPL",
@@ -260,14 +261,14 @@ func newSelfBypassReleaseProgram(mapFD int) (*CiliumEBPF.Program, error) {
 
 func newSelfBypassSocketAddrProgram(mapFD int, hook selfBypassSocketAddrHook) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
-		Name:         "sb_self_" + hook.name,
+		Name:         hook.kernelProgramName,
 		Type:         CiliumEBPF.CGroupSockAddr,
 		AttachType:   hook.attachType,
 		License:      "GPL",
 		Instructions: selfBypassSocketAddrInstructions(mapFD),
 	})
 	if err != nil {
-		return nil, E.Cause(err, "load eBPF self-bypass ", hook.name, " hook")
+		return nil, E.Cause(err, "load eBPF self-bypass ", hook.hookName, " hook")
 	}
 	return program, nil
 }

@@ -38,18 +38,18 @@ const (
 )
 
 type cgroupProgramDefinition struct {
-	name       string
-	attachType CiliumEBPF.AttachType
+	kernelProgramName string
+	attachType        CiliumEBPF.AttachType
 }
 
 var cgroupProgramDefinitions = [cgroupProgramCount]cgroupProgramDefinition{
-	{name: "sb_ebpf_conn4", attachType: CiliumEBPF.AttachCGroupInet4Connect},
-	{name: "sb_ebpf_udp4", attachType: CiliumEBPF.AttachCGroupUDP4Sendmsg},
-	{name: "sb_ebpf_urcv4", attachType: CiliumEBPF.AttachCGroupUDP4Recvmsg},
-	{name: "sb_ebpf_conn6", attachType: CiliumEBPF.AttachCGroupInet6Connect},
-	{name: "sb_ebpf_udp6", attachType: CiliumEBPF.AttachCGroupUDP6Sendmsg},
-	{name: "sb_ebpf_urcv6", attachType: CiliumEBPF.AttachCGroupUDP6Recvmsg},
-	{name: "sb_ebpf_rel", attachType: CiliumEBPF.AttachCgroupInetSockRelease},
+	{kernelProgramName: kernelProgramNameCgroupConnect4, attachType: CiliumEBPF.AttachCGroupInet4Connect},
+	{kernelProgramName: kernelProgramNameCgroupSendmsg4, attachType: CiliumEBPF.AttachCGroupUDP4Sendmsg},
+	{kernelProgramName: kernelProgramNameCgroupRecvmsg4, attachType: CiliumEBPF.AttachCGroupUDP4Recvmsg},
+	{kernelProgramName: kernelProgramNameCgroupConnect6, attachType: CiliumEBPF.AttachCGroupInet6Connect},
+	{kernelProgramName: kernelProgramNameCgroupSendmsg6, attachType: CiliumEBPF.AttachCGroupUDP6Sendmsg},
+	{kernelProgramName: kernelProgramNameCgroupRecvmsg6, attachType: CiliumEBPF.AttachCGroupUDP6Recvmsg},
+	{kernelProgramName: kernelProgramNameCgroupRelease, attachType: CiliumEBPF.AttachCgroupInetSockRelease},
 }
 
 type cgroupRuntime struct {

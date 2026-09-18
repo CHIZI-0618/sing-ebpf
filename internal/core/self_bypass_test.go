@@ -98,6 +98,12 @@ func TestSelfBypassSocketAddrHooks(t *testing.T) {
 	if len(hooks) != 4 {
 		t.Fatalf("unexpected dual-stack self-bypass hook count: %d", len(hooks))
 	}
+	if hooks[0].kernelProgramName != kernelProgramNameSelfConnect4 ||
+		hooks[1].kernelProgramName != kernelProgramNameSelfConnect6 ||
+		hooks[2].kernelProgramName != kernelProgramNameSelfSendmsg4 ||
+		hooks[3].kernelProgramName != kernelProgramNameSelfSendmsg6 {
+		t.Fatalf("unexpected self-bypass kernel program names: %+v", hooks)
+	}
 	if hooks[0].attachType != CiliumEBPF.AttachCGroupInet4Connect ||
 		hooks[1].attachType != CiliumEBPF.AttachCGroupInet6Connect ||
 		hooks[2].attachType != CiliumEBPF.AttachCGroupUDP4Sendmsg ||

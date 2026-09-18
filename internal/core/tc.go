@@ -348,8 +348,8 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 			localRawIPSection = "classifier/local_egress_raw_ip_process"
 		}
 		selections = append(selections,
-			programSelection{section: localEthernetSection, name: "sb_tc_local_l2"},
-			programSelection{section: localRawIPSection, name: "sb_tc_local_l3"},
+			programSelection{section: localEthernetSection, kernelProgramName: kernelProgramNameTCLocalEthernet},
+			programSelection{section: localRawIPSection, kernelProgramName: kernelProgramNameTCLocalRawIP},
 		)
 		programIndexes = append(programIndexes, tcProgramLocalEgressEthernet, tcProgramLocalEgressRawIP)
 	}
@@ -364,8 +364,8 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 			sharedRawIPSection += "_legacy"
 		}
 		selections = append(selections,
-			programSelection{section: sharedEthernetSection, name: "sb_tc_share_l2"},
-			programSelection{section: sharedRawIPSection, name: "sb_tc_share_l3"},
+			programSelection{section: sharedEthernetSection, kernelProgramName: kernelProgramNameTCSharedEthernet},
+			programSelection{section: sharedRawIPSection, kernelProgramName: kernelProgramNameTCSharedRawIP},
 		)
 		programIndexes = append(programIndexes, tcProgramSharedIngressEthernet, tcProgramSharedIngressRawIP)
 	}
@@ -376,7 +376,7 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 		} else if legacyTCP {
 			deliverySection += "_legacy"
 		}
-		selections = append(selections, programSelection{section: deliverySection, name: "sb_tc_deliver"})
+		selections = append(selections, programSelection{section: deliverySection, kernelProgramName: kernelProgramNameTCDelivery})
 		programIndexes = append(programIndexes, tcProgramDeliveryIngress)
 	}
 	loadedPrograms, err := loadObjectPrograms(loadTC, maps, selections)

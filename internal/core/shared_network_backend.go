@@ -303,8 +303,8 @@ func prepareSharedNetworkRuntime(
 	replacements["shared_bypass_ipv4"] = bypassIPv4Map
 	replacements["shared_bypass_ipv6"] = bypassIPv6Map
 	programs, loadErr := loadObjectPrograms(loadSharedNetwork, replacements, []programSelection{
-		{section: "classifier/ingress", name: "sb_share_in"},
-		{section: "classifier/egress", name: "sb_share_out"},
+		{section: "classifier/ingress", kernelProgramName: kernelProgramNameSharedIngress},
+		{section: "classifier/egress", kernelProgramName: kernelProgramNameSharedEgress},
 	})
 	if loadErr != nil {
 		return loadErr

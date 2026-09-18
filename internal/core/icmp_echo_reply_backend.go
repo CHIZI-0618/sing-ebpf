@@ -86,10 +86,10 @@ func loadICMPEchoReplyResources() (map[string]*CiliumEBPF.Map, []*CiliumEBPF.Pro
 		return nil, nil, err
 	}
 	selections := []programSelection{
-		{section: "classifier/icmp_echo_reply_local_reply_ethernet", name: "sb_icmp_lcl_e"},
-		{section: "classifier/icmp_echo_reply_local_reply_raw_ip", name: "sb_icmp_lcl_r"},
-		{section: "classifier/icmp_echo_reply_shared_reply_ethernet", name: "sb_icmp_shr_e"},
-		{section: "classifier/icmp_echo_reply_shared_reply_raw_ip", name: "sb_icmp_shr_r"},
+		{section: "classifier/icmp_echo_reply_local_reply_ethernet", kernelProgramName: kernelProgramNameICMPLocalEthernet},
+		{section: "classifier/icmp_echo_reply_local_reply_raw_ip", kernelProgramName: kernelProgramNameICMPLocalRawIP},
+		{section: "classifier/icmp_echo_reply_shared_reply_ethernet", kernelProgramName: kernelProgramNameICMPSharedEthernet},
+		{section: "classifier/icmp_echo_reply_shared_reply_raw_ip", kernelProgramName: kernelProgramNameICMPSharedRawIP},
 	}
 	programs, err := loadObjectPrograms(loadICMPEchoReply, maps, selections)
 	if err != nil {

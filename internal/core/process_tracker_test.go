@@ -51,6 +51,12 @@ func TestProcessTrackerHooks(t *testing.T) {
 		dualStackUDP[3].attachType != CiliumEBPF.AttachCGroupUDP6Sendmsg {
 		t.Fatalf("unexpected dual-stack UDP process tracker hooks: %+v", dualStackUDP)
 	}
+	if dualStackUDP[0].kernelProgramName != kernelProgramNameProcessConnect4 ||
+		dualStackUDP[1].kernelProgramName != kernelProgramNameProcessConnect6 ||
+		dualStackUDP[2].kernelProgramName != kernelProgramNameProcessSendmsg4 ||
+		dualStackUDP[3].kernelProgramName != kernelProgramNameProcessSendmsg6 {
+		t.Fatalf("unexpected process tracker kernel program names: %+v", dualStackUDP)
+	}
 }
 
 func TestProcessTrackerInstructions(t *testing.T) {

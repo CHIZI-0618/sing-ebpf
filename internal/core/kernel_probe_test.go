@@ -296,7 +296,14 @@ func TestValidateProbeSharedFraming(t *testing.T) {
 }
 
 func TestSingEBPFProgramNames(t *testing.T) {
-	for _, name := range []string{"sb_tc_local_l2", "sb_ebpf_conn4", "sb_share_in", "sb_self_create", "sb_proc_connect4"} {
+	for _, name := range []string{
+		kernelProgramNameTCLocalEthernet,
+		kernelProgramNameCgroupConnect4,
+		kernelProgramNameSharedIngress,
+		kernelProgramNameICMPLocalEthernet,
+		kernelProgramNameSelfCreate,
+		kernelProgramNameProcessConnect4,
+	} {
 		if !isSingEBPFProgramName(name) {
 			t.Fatalf("sing-ebpf eBPF program was not recognized: %s", name)
 		}
