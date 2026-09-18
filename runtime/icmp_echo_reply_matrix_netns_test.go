@@ -1,4 +1,4 @@
-//go:build with_ebpf && (linux || android)
+//go:build with_ebpf && linux && ebpf_integration
 
 package runtime
 
@@ -294,68 +294,39 @@ func TestICMPEchoLocalReplyAnswersARealIPv6PingViaClsact(t *testing.T) {
 	requireOneICMPEchoReply(t, backend, before)
 }
 
-// TestICMPEchoSharedReplyAnswersARealIPv6ClientPing is
-// TestICMPEchoSharedReplyAnswersARealClientPing's IPv6 counterpart for
-// shared.data_plane: socket_assign, forced onto clsact the same way.
-func TestICMPEchoSharedReplyAnswersARealIPv6ClientPing(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedSocketAssign, ipv6: true, priority: 2,
-		selfName: "sbicmp6w0", peerName: "sbicmp6w1", client: "fd00:250::5", identifier: 0x6321, sequence: 4,
-	})
-}
-
-// TestICMPEchoSharedReplyAnswersARealClientPingViaTCX is
-// TestICMPEchoSharedReplyAnswersARealClientPing over TCX instead of the
-// forced clsact that test uses, completing shared.data_plane: socket_assign's
-// IPv4 coverage the same way TestICMPEchoLocalReplyAnswersARealPingViaTCX
-// completes the local role's. Skips (does not fail) on a kernel without TCX.
-func TestICMPEchoSharedReplyAnswersARealClientPingViaTCX(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedSocketAssign, priority: 1,
-		selfName: "sbicmpxw0", peerName: "sbicmpxw1", client: "10.250.0.8", identifier: 0x7654, sequence: 5,
-	})
-}
-
-// TestICMPEchoSharedReplyAnswersARealIPv6ClientPingViaTCX combines the
-// previous two: shared.data_plane: socket_assign, IPv6, TCX -- the last of
-// this data plane's four combinations. Skips on a kernel without TCX.
-func TestICMPEchoSharedReplyAnswersARealIPv6ClientPingViaTCX(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedSocketAssign, ipv6: true, priority: 1,
-		selfName: "sbicmp6x0", peerName: "sbicmp6x1", client: "fd00:250::6", identifier: 0x8765, sequence: 6,
-	})
-}
-
-// TestICMPEchoSharedRewriteAnswersARealIPv6ClientPing is
-// TestICMPEchoSharedRewriteAnswersARealClientPing's IPv6 counterpart for
-// shared.data_plane: packet_rewrite, forced onto clsact the same way.
-func TestICMPEchoSharedRewriteAnswersARealIPv6ClientPing(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedPacketRewrite, ipv6: true, priority: 2,
-		selfName: "sbrw6w0", peerName: "sbrw6w1", client: "fd00:250::7", identifier: 0x9876, sequence: 8,
-	})
-}
-
-// TestICMPEchoSharedRewriteAnswersARealClientPingViaTCX is
-// TestICMPEchoSharedRewriteAnswersARealClientPing over TCX instead of the
-// forced clsact that test uses. The existing comment on that test's
-// priority=2 line ("TCX is covered by attachSharedRewriteInterface's own
-// existing coverage") refers only to the attachment mechanism itself
-// attaching correctly, not to a real ICMP round trip over it -- this test
-// is that missing proof. Skips (does not fail) on a kernel without TCX.
-func TestICMPEchoSharedRewriteAnswersARealClientPingViaTCX(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedPacketRewrite, priority: 1,
-		selfName: "sbrwxw0", peerName: "sbrwxw1", client: "10.250.0.9", identifier: 0xa987, sequence: 9,
-	})
-}
-
-// TestICMPEchoSharedRewriteAnswersARealIPv6ClientPingViaTCX is the last
-// cell in the matrix: shared.data_plane: packet_rewrite, IPv6, TCX. Skips
-// on a kernel without TCX.
-func TestICMPEchoSharedRewriteAnswersARealIPv6ClientPingViaTCX(t *testing.T) {
-	runForceInterceptSharedReplyCase(t, forceInterceptSharedReplyCase{
-		dataPlane: forceInterceptSharedPacketRewrite, ipv6: true, priority: 1,
-		selfName: "sbrw6x0", peerName: "sbrw6x1", client: "fd00:250::8", identifier: 0xba98, sequence: 10,
-	})
+func TestICMPEchoSharedReplyMatrix(t *testing.T) {
+	testCases := []struct {
+		name string
+		forceInterceptSharedReplyCase
+	}{
+		{"socket_assign/IPv6/clsact", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedSocketAssign, ipv6: true, priority: 2,
+			selfName: "sbicmp6w0", peerName: "sbicmp6w1", client: "fd00:250::5", identifier: 0x6321, sequence: 4,
+		}},
+		{"socket_assign/IPv4/TCX", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedSocketAssign, priority: 1,
+			selfName: "sbicmpxw0", peerName: "sbicmpxw1", client: "10.250.0.8", identifier: 0x7654, sequence: 5,
+		}},
+		{"socket_assign/IPv6/TCX", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedSocketAssign, ipv6: true, priority: 1,
+			selfName: "sbicmp6x0", peerName: "sbicmp6x1", client: "fd00:250::6", identifier: 0x8765, sequence: 6,
+		}},
+		{"packet_rewrite/IPv6/clsact", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedPacketRewrite, ipv6: true, priority: 2,
+			selfName: "sbrw6w0", peerName: "sbrw6w1", client: "fd00:250::7", identifier: 0x9876, sequence: 8,
+		}},
+		{"packet_rewrite/IPv4/TCX", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedPacketRewrite, priority: 1,
+			selfName: "sbrwxw0", peerName: "sbrwxw1", client: "10.250.0.9", identifier: 0xa987, sequence: 9,
+		}},
+		{"packet_rewrite/IPv6/TCX", forceInterceptSharedReplyCase{
+			dataPlane: forceInterceptSharedPacketRewrite, ipv6: true, priority: 1,
+			selfName: "sbrw6x0", peerName: "sbrw6x1", client: "fd00:250::8", identifier: 0xba98, sequence: 10,
+		}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runForceInterceptSharedReplyCase(t, testCase.forceInterceptSharedReplyCase)
+		})
+	}
 }

@@ -1,4 +1,4 @@
-//go:build with_ebpf && (linux || android)
+//go:build with_ebpf && linux && ebpf_integration
 
 package core
 

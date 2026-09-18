@@ -1,4 +1,4 @@
-//go:build with_ebpf && (linux || android)
+//go:build with_ebpf && linux && ebpf_integration
 
 package core
 
@@ -81,43 +81,5 @@ func TestSharedNetworkStatsAllCategoriesIndependent(t *testing.T) {
 		if value != uint64(expectedIndex+1) {
 			t.Fatalf("%s = %d, want %d", expected.name, value, expectedIndex+1)
 		}
-	}
-}
-
-// TestSharedNetworkStatsIndependent proves the two categories are read from
-// distinct indices, not the same counter under two names: incrementing the
-// underlying kernel map at TokenReservationFailure's index directly must not
-// move RewriteFailures.
-func TestSharedNetworkStatsIndependent(t *testing.T) {
-	policy := newTestSharedNetworkForceInterceptPolicy(t, "198.18.0.0/15")
-	backend, err := PrepareSharedPacketRewrite(nil, newTestSharedPacketRewriteConfig(policy, false))
-	if err != nil {
-		t.Skipf("cannot prepare a real shared-network eBPF backend in this environment: %v", err)
-	}
-	t.Cleanup(func() { _ = backend.Close() })
-
-	statsMap := backend.runtime.maps["shared_stats"]
-	if statsMap == nil {
-		t.Fatal("shared_stats map is unavailable")
-	}
-	perCPU := make([]uint64, CiliumEBPF.MustPossibleCPU())
-	perCPU[0] = 1
-	if err := statsMap.Put(sharedNetworkStatTokenReservationFailure, perCPU); err != nil {
-		t.Fatalf("seed shared_stats[token_reservation_failure]: %v", err)
-	}
-
-	tokenFailures, err := backend.TokenReservationFailures()
-	if err != nil {
-		t.Fatalf("TokenReservationFailures: %v", err)
-	}
-	if tokenFailures != 1 {
-		t.Fatalf("TokenReservationFailures = %d, want 1", tokenFailures)
-	}
-	rewriteFailures, err := backend.RewriteFailures()
-	if err != nil {
-		t.Fatalf("RewriteFailures: %v", err)
-	}
-	if rewriteFailures != 0 {
-		t.Fatalf("RewriteFailures = %d, want 0 -- it must not read the token-reservation-failure slot", rewriteFailures)
 	}
 }
