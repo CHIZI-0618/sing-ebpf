@@ -233,7 +233,7 @@ func PrepareSharedPacketRewrite(_ *CgroupBackend, config SharedPacketRewriteConf
 	backend.bypassIPv6CIDR = append([]netip.Prefix(nil), policy.sharedInitialBypass.ipv6...)
 	backend.bypassIPv4Count = len(backend.bypassIPv4CIDR)
 	backend.bypassIPv6Count = len(backend.bypassIPv6CIDR)
-	if err := backend.updateControl(); err != nil {
+	if err := backend.updatePolicyFlagsLocked(); err != nil {
 		_ = backend.Close()
 		return nil, E.Cause(err, "initialize shared-network control")
 	}
