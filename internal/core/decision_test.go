@@ -53,3 +53,44 @@ func TestCompileActionPolicyUsesFinalActions(t *testing.T) {
 		t.Fatalf("shared source actions were not compiled: include=%+v exclude_mac=%+v", policy.includeSource, policy.excludeSourceMAC)
 	}
 }
+
+func TestCompileActionPolicyDerivesDNSAction(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		action     Decision
+		wantLocal  DNSMode
+		wantShared DNSMode
+	}{
+		{"hijack", DecisionIntercept, DNSModeHijack, DNSModeHijack},
+		{"off", DecisionPass, DNSModeOff, DNSModeOff},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			policy, err := CompileActionPolicy(ActionPolicy{
+				Local: ActionScope{
+					Default:         DecisionIntercept,
+					DestinationPort: []PortDecision{{Protocol: ProtocolUDP, Port: 53, Action: testCase.action}},
+				},
+				Shared: ActionScope{
+					Default:         DecisionIntercept,
+					DestinationPort: []PortDecision{{Protocol: ProtocolUDP, Port: 53, Action: testCase.action}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy.local.DNSMode != testCase.wantLocal || policy.sharedDNSMode != testCase.wantShared {
+				t.Fatalf("DNS modes = %v/%v, want %v/%v", policy.local.DNSMode, policy.sharedDNSMode, testCase.wantLocal, testCase.wantShared)
+			}
+		})
+	}
+	policy, err := CompileActionPolicy(ActionPolicy{
+		Local:  ActionScope{Default: DecisionIntercept},
+		Shared: ActionScope{Default: DecisionIntercept},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.local.DNSMode != DNSModeRespectPolicy || policy.sharedDNSMode != DNSModeRespectPolicy {
+		t.Fatalf("empty DNS action policy = %v/%v, want respect-policy", policy.local.DNSMode, policy.sharedDNSMode)
+	}
+}
