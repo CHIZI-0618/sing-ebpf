@@ -174,7 +174,11 @@ before host, private-address, and destination-CIDR bypass. Other traffic applies
 the same source policy followed by those destination bypasses.
 
 Local egress checks the socket-cookie self-bypass map. Shared source CIDR and
-MAC include/exclude policies are evaluated only on the shared path.
+MAC include/exclude policies are evaluated only on the shared path. If either
+include list is configured, CIDR and MAC are alternative selectors (OR); a
+matching CIDR or MAC exclude always wins. Local and shared destination-bypass
+CIDR maps are separate, so a consumer can update `local.bypass_rule_set` and
+`shared.bypass_rule_set` independently without aliasing policy state.
 
 ## Object layout
 
