@@ -109,3 +109,27 @@ func TestProcessTrackerPolicyMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestCompileUIDDecisions(t *testing.T) {
+	entries, defaultBypass, err := compileUIDDecisions([]UIDDecision{
+		{Start: 1000, End: 1999, Action: DecisionIntercept},
+	}, DecisionPass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !defaultBypass || len(entries) == 0 {
+		t.Fatalf("include-style decisions compiled as defaultBypass=%v entries=%d", defaultBypass, len(entries))
+	}
+	entries, defaultBypass, err = compileUIDDecisions([]UIDDecision{
+		{Start: 1000, End: 1999, Action: DecisionPass},
+	}, DecisionIntercept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultBypass || len(entries) == 0 {
+		t.Fatalf("exclude-style decisions compiled as defaultBypass=%v entries=%d", defaultBypass, len(entries))
+	}
+	if _, _, err = compileUIDDecisions([]UIDDecision{{Start: 2, End: 1, Action: DecisionPass}}, DecisionIntercept); err == nil {
+		t.Fatal("accepted an inverted UID range")
+	}
+}
