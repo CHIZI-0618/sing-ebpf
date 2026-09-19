@@ -15,21 +15,26 @@ The generic rule primitives in `decision.go` are deliberately limited to the
 match key and the final action. A rule does not carry an `include`, `exclude`,
 `bypass`, or `hijack` meaning. Those are sing-box policy concepts.
 
-## Migration status
+## Runtime status
 
-The existing selector-based API is retained temporarily while the four
-runtime paths are migrated independently:
+All four data paths now have action-level update entry points:
 
-1. cgroup socket hooks;
-2. local TC;
-3. shared TC socket assignment;
-4. shared packet rewrite.
+1. cgroup socket hooks: `CgroupBackend.UpdateDestinationDecisions`;
+2. local TC: `TCBackend.UpdateLocalDestinationDecisions`;
+3. shared TC socket assignment: `TCBackend.UpdateSharedDestinationDecisions`;
+4. shared packet rewrite: `SharedPacketRewriteBackend.UpdateDestinationDecisions`.
 
-During migration, new action-rule APIs must be added before removing the old
-selector API. Each path must retain transactional map replacement, default
-action handling, self-bypass, flow cleanup, and capability-selected fallback
-behavior. The selector API is removed only after sing-box has moved its policy
-compiler and all four paths have action-level regression coverage.
+The process tracker likewise accepts `UIDDecision` values and a final default
+action. Dynamic rule-set changes are compiled by sing-box into canonical
+destination `pass` decisions before they cross this boundary. The library
+keeps transactional map replacement, default action handling, self-bypass,
+flow cleanup, and capability-selected fallback behavior.
+
+The older selector-based API remains as a compatibility surface for existing
+standalone users and low-level integration tests. New sing-box code must not
+use it for configuration semantics; it is deliberately not extended with
+DNS, FakeIP, rule-set, package, or other sing-box concepts. It can be removed
+in a future breaking release after downstream consumers have migrated.
 
 ## Ownership matrix
 
