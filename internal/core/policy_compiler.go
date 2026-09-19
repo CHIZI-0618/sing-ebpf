@@ -81,6 +81,7 @@ func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
 	if !forceIPv6.IsValid() {
 		forceIPv6 = sharedForceIPv6
 	}
+	local.local.DNSMode = actionDNSMode(config.Local)
 	return CompiledPolicy{
 		local:                   local.local,
 		uidEntries:              local.uidEntries,
@@ -95,7 +96,7 @@ func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
 		forceInterceptIPv6:      forceIPv6,
 		localInitialBypass:      localBypass,
 		sharedInitialBypass:     sharedBypass,
-		sharedDNSMode:           DNSModeRespectPolicy,
+		sharedDNSMode:           actionDNSMode(config.Shared),
 		sharedBypassPrivate:     false,
 	}, nil
 }
@@ -110,6 +111,20 @@ type compiledActionScope struct {
 	excludeSourceMAC        []MACAddress
 	localBypassPortEntries  []tcPortKey
 	sharedBypassPortEntries []tcPortKey
+}
+
+func actionDNSMode(scope ActionScope) DNSMode {
+	for _, rule := range scope.DestinationPort {
+		if rule.Port == 53 && rule.Action == DecisionIntercept {
+			return DNSModeHijack
+		}
+	}
+	for _, rule := range scope.DestinationPort {
+		if rule.Port == 53 && rule.Action == DecisionPass {
+			return DNSModeOff
+		}
+	}
+	return DNSModeRespectPolicy
 }
 
 func validateActionScope(scope ActionScope, name string) error {
