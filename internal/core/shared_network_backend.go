@@ -221,12 +221,18 @@ func PrepareSharedPacketRewrite(_ *CgroupBackend, config SharedPacketRewriteConf
 		return nil, err
 	}
 	if err = populateCompiledPolicyMaps(policyMapTargets{
-		Scope:      "shared packet-rewrite",
-		SharedPort: backend.runtime.maps["shared_bypass_port"],
+		Scope:            "shared packet-rewrite",
+		SharedPort:       backend.runtime.maps["shared_bypass_port"],
+		SharedBypassIPv4: backend.bypassIPv4Map,
+		SharedBypassIPv6: backend.bypassIPv6Map,
 	}, policy); err != nil {
 		_ = backend.Close()
 		return nil, err
 	}
+	backend.bypassIPv4CIDR = append([]netip.Prefix(nil), policy.sharedInitialBypass.ipv4...)
+	backend.bypassIPv6CIDR = append([]netip.Prefix(nil), policy.sharedInitialBypass.ipv6...)
+	backend.bypassIPv4Count = len(backend.bypassIPv4CIDR)
+	backend.bypassIPv6Count = len(backend.bypassIPv6CIDR)
 	if err := backend.updateControl(); err != nil {
 		_ = backend.Close()
 		return nil, E.Cause(err, "initialize shared-network control")

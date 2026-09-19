@@ -274,6 +274,18 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 	if len(policy.excludeSourceMAC) > 0 {
 		controlValue.Flags |= 1 << 15
 	}
+	if len(policy.localInitialBypass.ipv4) > 0 {
+		controlValue.Flags |= 1 << 8
+	}
+	if len(policy.localInitialBypass.ipv6) > 0 {
+		controlValue.Flags |= 1 << 9
+	}
+	if len(policy.sharedInitialBypass.ipv4) > 0 {
+		controlValue.Flags |= tcFlagSharedBypassIPv4
+	}
+	if len(policy.sharedInitialBypass.ipv6) > 0 {
+		controlValue.Flags |= tcFlagSharedBypassIPv6
+	}
 	if forceInterceptIPv4.IsValid() {
 		controlValue.Flags |= 1 << 10
 		controlValue.ForceInterceptIPv4Prefix = forceInterceptIPv4.Addr().As4()
@@ -306,6 +318,10 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		UID:               maps["tc_uid_policy"],
 		LocalPort:         maps["tc_local_bypass_port"],
 		SharedPort:        maps["tc_shared_bypass_port"],
+		LocalBypassIPv4:   maps["tc_local_bypass_ipv4"],
+		LocalBypassIPv6:   maps["tc_local_bypass_ipv6"],
+		SharedBypassIPv4:  maps["tc_shared_bypass_ipv4"],
+		SharedBypassIPv6:  maps["tc_shared_bypass_ipv6"],
 		IncludeSourceIPv4: maps["tc_include_source_ipv4"],
 		IncludeSourceIPv6: maps["tc_include_source_ipv6"],
 		ExcludeSourceIPv4: maps["tc_exclude_source_ipv4"],

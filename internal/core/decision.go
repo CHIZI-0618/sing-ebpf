@@ -45,3 +45,23 @@ type MACDecision struct {
 	Address MACAddress
 	Action  Decision
 }
+
+// ActionScope contains only match primitives and their final actions. It does
+// not encode include/exclude, DNS, FakeIP, or rule-set semantics.
+type ActionScope struct {
+	Default         Decision
+	UID             []UIDDecision
+	SourceCIDR      []CIDRDecision
+	SourceMAC       []MACDecision
+	DestinationCIDR []CIDRDecision
+	DestinationPort []PortDecision
+}
+
+// ActionPolicy is the policy input for the action-only API. The caller owns
+// configuration semantics and supplies the final action for every rule.
+type ActionPolicy struct {
+	EnableTCP bool
+	EnableUDP bool
+	Local     ActionScope
+	Shared    ActionScope
+}

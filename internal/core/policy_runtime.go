@@ -56,6 +56,10 @@ type policyMapTargets struct {
 	UID               *CiliumEBPF.Map
 	LocalPort         *CiliumEBPF.Map
 	SharedPort        *CiliumEBPF.Map
+	LocalBypassIPv4   *CiliumEBPF.Map
+	LocalBypassIPv6   *CiliumEBPF.Map
+	SharedBypassIPv4  *CiliumEBPF.Map
+	SharedBypassIPv6  *CiliumEBPF.Map
 	IncludeSourceIPv4 *CiliumEBPF.Map
 	IncludeSourceIPv6 *CiliumEBPF.Map
 	ExcludeSourceIPv4 *CiliumEBPF.Map
@@ -97,6 +101,10 @@ func populateCompiledPolicyMaps(targets policyMapTargets, policy CompiledPolicy)
 		mapInst  *CiliumEBPF.Map
 		prefixes []netip.Prefix
 	}{
+		{name: "local bypass IPv4", mapInst: targets.LocalBypassIPv4, prefixes: policy.localInitialBypass.ipv4},
+		{name: "local bypass IPv6", mapInst: targets.LocalBypassIPv6, prefixes: policy.localInitialBypass.ipv6},
+		{name: "shared bypass IPv4", mapInst: targets.SharedBypassIPv4, prefixes: policy.sharedInitialBypass.ipv4},
+		{name: "shared bypass IPv6", mapInst: targets.SharedBypassIPv6, prefixes: policy.sharedInitialBypass.ipv6},
 		{name: "include source IPv4", mapInst: targets.IncludeSourceIPv4, prefixes: policy.includeSource.ipv4},
 		{name: "include source IPv6", mapInst: targets.IncludeSourceIPv6, prefixes: policy.includeSource.ipv6},
 		{name: "exclude source IPv4", mapInst: targets.ExcludeSourceIPv4, prefixes: policy.excludeSource.ipv4},

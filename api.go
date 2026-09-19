@@ -15,6 +15,8 @@ import (
 
 type (
 	Decision                       = core.Decision
+	ActionPolicy                   = core.ActionPolicy
+	ActionScope                    = core.ActionScope
 	CIDRDecision                   = core.CIDRDecision
 	PortDecision                   = core.PortDecision
 	UIDDecision                    = core.UIDDecision
@@ -472,6 +474,12 @@ func (b *SharedPacketRewriteBackend) Close() error {
 
 func CompilePolicy(config PolicyConfig) (CompiledPolicy, error) {
 	return core.CompilePolicy(config)
+}
+
+// CompileActionPolicy accepts only final pass/intercept rules. Configuration
+// semantics such as DNS, FakeIP and rule-sets must be compiled by the caller.
+func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
+	return core.CompileActionPolicy(config)
 }
 
 func CompileBypassCIDRPolicy(prefixes []netip.Prefix) (BypassCIDRPolicy, error) {
