@@ -14,6 +14,11 @@ import (
 )
 
 type (
+	Decision                       = core.Decision
+	CIDRDecision                   = core.CIDRDecision
+	PortDecision                   = core.PortDecision
+	UIDDecision                    = core.UIDDecision
+	MACDecision                    = core.MACDecision
 	DNSMode                        = core.DNSMode
 	UIDRange                       = core.UIDRange
 	LocalPolicy                    = core.LocalPolicy
@@ -54,6 +59,9 @@ type (
 )
 
 const (
+	DecisionPass      = core.DecisionPass
+	DecisionIntercept = core.DecisionIntercept
+
 	ProtocolTCP = core.ProtocolTCP
 	ProtocolUDP = core.ProtocolUDP
 

@@ -60,6 +60,9 @@ func TestTCProgramRunIntegration(t *testing.T) {
 	unselectedClient := testIPv4TCPPacket(
 		netip.MustParseAddr("198.51.100.10"), netip.MustParseAddr("203.0.113.10"), 53001, 443,
 	)
+	// testIPv4TCPPacket uses the included MAC by default. Change it here so
+	// this case really exercises a client matching neither source selector.
+	unselectedClient[11] = 2
 	action, _ = runTCProgram(t, sharedIngress, unselectedClient)
 	if action != testTCActUnspec {
 		t.Fatalf("client matching neither source selector was intercepted: action=%d", action)
