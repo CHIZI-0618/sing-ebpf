@@ -149,12 +149,18 @@ func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer target.Close()
+	dnsTarget, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53})
+	if err != nil {
+		t.Skipf("cannot reserve loopback DNS port for UID policy regression: %v", err)
+	}
+	defer dnsTarget.Close()
 	token, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 128, 0, 1), Port: listenerPort})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer token.Close()
 	targetAddr := target.LocalAddr().(*net.UDPAddr)
+	dnsTargetAddr := dnsTarget.LocalAddr().(*net.UDPAddr)
 
 	// A new socket has no flow-cache entry and must reach the real target.
 	direct, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -176,8 +182,10 @@ func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flowKey := udpFlowKey{SocketCookie: cookie, Family: addressFamilyIPv4, Protocol: ProtocolUDP, Port: uint16(targetAddr.Port)}
-	copy(flowKey.Addr[:4], targetAddr.IP.To4())
+	// Port 53 is intentional: respect_policy must evaluate UID before the
+	// cached proxy action even when DNS interception is enabled.
+	flowKey := udpFlowKey{SocketCookie: cookie, Family: addressFamilyIPv4, Protocol: ProtocolUDP, Port: uint16(dnsTargetAddr.Port)}
+	copy(flowKey.Addr[:4], dnsTargetAddr.IP.To4())
 	flowValue := udpFlowValue{
 		Action:            udpFlowActionProxy,
 		LastSeenSeconds:   uint32(time.Now().Unix()),
@@ -192,10 +200,10 @@ func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
 	if err = backend.runtime.maps["cgroup_udp_flow"].Update(&flowKey, &flowValue, CiliumEBPF.UpdateAny); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = cached.WriteToUDP([]byte("cached"), targetAddr); err != nil {
+	if _, err = cached.WriteToUDP([]byte("cached"), dnsTargetAddr); err != nil {
 		t.Fatal(err)
 	}
-	assertUDPReceived(t, target, "cached")
+	assertUDPReceived(t, dnsTarget, "cached")
 	assertUDPNotReceived(t, token)
 }
 
