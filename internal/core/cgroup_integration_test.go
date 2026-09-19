@@ -117,7 +117,7 @@ func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
 		Path:          path,
 		EnableUDP:     true,
 		RedirectIPv4:  netip.MustParsePrefix("127.128.0.0/9"),
-		MapCapacity:   CgroupMapCapacity{UDPRedirect: 64, UDPPeer: 64, UDPFlow: 64, SocketBypass: 8},
+		MapCapacity:   CgroupMapCapacity{TCPRedirect: 64, UDPRedirect: 64, UDPPeer: 64, UDPFlow: 64, SocketBypass: 8},
 		UDPTimeout:    time.Minute,
 		Policy:        policy,
 		SelfBypassMap: selfBypassMap,
