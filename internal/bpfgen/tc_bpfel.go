@@ -17,8 +17,6 @@ import (
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
 	TCMapTcAssignment                           = "tc_assignment"
-	TCMapTcBypassIpv4                           = "tc_bypass_ipv4"
-	TCMapTcBypassIpv6                           = "tc_bypass_ipv6"
 	TCMapTcControl                              = "tc_control"
 	TCMapTcExcludeSourceIpv4                    = "tc_exclude_source_ipv4"
 	TCMapTcExcludeSourceIpv6                    = "tc_exclude_source_ipv6"
@@ -29,8 +27,12 @@ const (
 	TCMapTcIncludeSourceIpv6                    = "tc_include_source_ipv6"
 	TCMapTcIncludeSourceMac                     = "tc_include_source_mac"
 	TCMapTcListenerSockets                      = "tc_listener_sockets"
+	TCMapTcLocalBypassIpv4                      = "tc_local_bypass_ipv4"
+	TCMapTcLocalBypassIpv6                      = "tc_local_bypass_ipv6"
 	TCMapTcLocalBypassPort                      = "tc_local_bypass_port"
 	TCMapTcSelfSockets                          = "tc_self_sockets"
+	TCMapTcSharedBypassIpv4                     = "tc_shared_bypass_ipv4"
+	TCMapTcSharedBypassIpv6                     = "tc_shared_bypass_ipv6"
 	TCMapTcSharedBypassPort                     = "tc_shared_bypass_port"
 	TCMapTcStats                                = "tc_stats"
 	TCMapTcUidPolicy                            = "tc_uid_policy"
@@ -111,8 +113,6 @@ type TCProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type TCMapSpecs struct {
 	TcAssignment        *ebpf.MapSpec `ebpf:"tc_assignment"`
-	TcBypassIpv4        *ebpf.MapSpec `ebpf:"tc_bypass_ipv4"`
-	TcBypassIpv6        *ebpf.MapSpec `ebpf:"tc_bypass_ipv6"`
 	TcControl           *ebpf.MapSpec `ebpf:"tc_control"`
 	TcExcludeSourceIpv4 *ebpf.MapSpec `ebpf:"tc_exclude_source_ipv4"`
 	TcExcludeSourceIpv6 *ebpf.MapSpec `ebpf:"tc_exclude_source_ipv6"`
@@ -123,8 +123,12 @@ type TCMapSpecs struct {
 	TcIncludeSourceIpv6 *ebpf.MapSpec `ebpf:"tc_include_source_ipv6"`
 	TcIncludeSourceMac  *ebpf.MapSpec `ebpf:"tc_include_source_mac"`
 	TcListenerSockets   *ebpf.MapSpec `ebpf:"tc_listener_sockets"`
+	TcLocalBypassIpv4   *ebpf.MapSpec `ebpf:"tc_local_bypass_ipv4"`
+	TcLocalBypassIpv6   *ebpf.MapSpec `ebpf:"tc_local_bypass_ipv6"`
 	TcLocalBypassPort   *ebpf.MapSpec `ebpf:"tc_local_bypass_port"`
 	TcSelfSockets       *ebpf.MapSpec `ebpf:"tc_self_sockets"`
+	TcSharedBypassIpv4  *ebpf.MapSpec `ebpf:"tc_shared_bypass_ipv4"`
+	TcSharedBypassIpv6  *ebpf.MapSpec `ebpf:"tc_shared_bypass_ipv6"`
 	TcSharedBypassPort  *ebpf.MapSpec `ebpf:"tc_shared_bypass_port"`
 	TcStats             *ebpf.MapSpec `ebpf:"tc_stats"`
 	TcUidPolicy         *ebpf.MapSpec `ebpf:"tc_uid_policy"`
@@ -157,8 +161,6 @@ func (o *TCObjects) Close() error {
 // It can be passed to LoadTCObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TCMaps struct {
 	TcAssignment        *ebpf.Map `ebpf:"tc_assignment"`
-	TcBypassIpv4        *ebpf.Map `ebpf:"tc_bypass_ipv4"`
-	TcBypassIpv6        *ebpf.Map `ebpf:"tc_bypass_ipv6"`
 	TcControl           *ebpf.Map `ebpf:"tc_control"`
 	TcExcludeSourceIpv4 *ebpf.Map `ebpf:"tc_exclude_source_ipv4"`
 	TcExcludeSourceIpv6 *ebpf.Map `ebpf:"tc_exclude_source_ipv6"`
@@ -169,8 +171,12 @@ type TCMaps struct {
 	TcIncludeSourceIpv6 *ebpf.Map `ebpf:"tc_include_source_ipv6"`
 	TcIncludeSourceMac  *ebpf.Map `ebpf:"tc_include_source_mac"`
 	TcListenerSockets   *ebpf.Map `ebpf:"tc_listener_sockets"`
+	TcLocalBypassIpv4   *ebpf.Map `ebpf:"tc_local_bypass_ipv4"`
+	TcLocalBypassIpv6   *ebpf.Map `ebpf:"tc_local_bypass_ipv6"`
 	TcLocalBypassPort   *ebpf.Map `ebpf:"tc_local_bypass_port"`
 	TcSelfSockets       *ebpf.Map `ebpf:"tc_self_sockets"`
+	TcSharedBypassIpv4  *ebpf.Map `ebpf:"tc_shared_bypass_ipv4"`
+	TcSharedBypassIpv6  *ebpf.Map `ebpf:"tc_shared_bypass_ipv6"`
 	TcSharedBypassPort  *ebpf.Map `ebpf:"tc_shared_bypass_port"`
 	TcStats             *ebpf.Map `ebpf:"tc_stats"`
 	TcUidPolicy         *ebpf.Map `ebpf:"tc_uid_policy"`
@@ -179,8 +185,6 @@ type TCMaps struct {
 func (m *TCMaps) Close() error {
 	return _TCClose(
 		m.TcAssignment,
-		m.TcBypassIpv4,
-		m.TcBypassIpv6,
 		m.TcControl,
 		m.TcExcludeSourceIpv4,
 		m.TcExcludeSourceIpv6,
@@ -191,8 +195,12 @@ func (m *TCMaps) Close() error {
 		m.TcIncludeSourceIpv6,
 		m.TcIncludeSourceMac,
 		m.TcListenerSockets,
+		m.TcLocalBypassIpv4,
+		m.TcLocalBypassIpv6,
 		m.TcLocalBypassPort,
 		m.TcSelfSockets,
+		m.TcSharedBypassIpv4,
+		m.TcSharedBypassIpv6,
 		m.TcSharedBypassPort,
 		m.TcStats,
 		m.TcUidPolicy,

@@ -20,6 +20,8 @@ func TestTCProgramRunIntegration(t *testing.T) {
 		SharedBypassPrivate: true,
 		ForceInterceptIPv4:  netip.MustParsePrefix("198.18.0.0/15"),
 		IncludeSourceMAC:    []MACAddress{{0x02, 0, 0, 0, 0, 1}},
+		IncludeSourceCIDR:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+		ExcludeSourceCIDR:   []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -48,15 +50,31 @@ func TestTCProgramRunIntegration(t *testing.T) {
 		t.Fatalf("selected flow did not reach socket assignment: action=%d", action)
 	}
 
-	unselectedMAC := append([]byte(nil), selected...)
-	unselectedMAC[11] = 2
-	action, _ = runTCProgram(t, sharedIngress, unselectedMAC)
+	matchedCIDR := append([]byte(nil), selected...)
+	matchedCIDR[11] = 2
+	action, _ = runTCProgram(t, sharedIngress, matchedCIDR)
+	if action != testTCActShot {
+		t.Fatalf("source CIDR match did not select a client without the included MAC: action=%d", action)
+	}
+
+	unselectedClient := testIPv4TCPPacket(
+		netip.MustParseAddr("198.51.100.10"), netip.MustParseAddr("203.0.113.10"), 53001, 443,
+	)
+	action, _ = runTCProgram(t, sharedIngress, unselectedClient)
 	if action != testTCActUnspec {
-		t.Fatalf("unselected source MAC was intercepted: action=%d", action)
+		t.Fatalf("client matching neither source selector was intercepted: action=%d", action)
+	}
+
+	excludedCIDR := testIPv4TCPPacket(
+		netip.MustParseAddr("203.0.113.10"), netip.MustParseAddr("203.0.113.20"), 53002, 443,
+	)
+	action, _ = runTCProgram(t, sharedIngress, excludedCIDR)
+	if action != testTCActUnspec {
+		t.Fatalf("excluded source CIDR was intercepted despite matching the included MAC: action=%d", action)
 	}
 
 	private := testIPv4TCPPacket(
-		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.168.1.1"), 53001, 443,
+		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.168.1.1"), 53003, 443,
 	)
 	action, _ = runTCProgram(t, sharedIngress, private)
 	if action != testTCActUnspec {
@@ -64,7 +82,7 @@ func TestTCProgramRunIntegration(t *testing.T) {
 	}
 
 	forceIntercept := testIPv4TCPPacket(
-		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("198.18.1.1"), 53002, 443,
+		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("198.18.1.1"), 53004, 443,
 	)
 	forceIntercept[11] = 2
 	action, _ = runTCProgram(t, sharedIngress, forceIntercept)
@@ -80,14 +98,14 @@ func TestTCProgramRunIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	bypassedHTTPS := testIPv4TCPPacket(
-		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("1.1.1.1"), 53003, 443,
+		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("1.1.1.1"), 53005, 443,
 	)
 	action, _ = runTCProgram(t, sharedIngress, bypassedHTTPS)
 	if action != testTCActUnspec {
 		t.Fatalf("destination bypass policy did not bypass HTTPS: action=%d", action)
 	}
 	respectedDNS := testIPv4TCPPacket(
-		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("1.1.1.1"), 53004, 53,
+		netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("1.1.1.1"), 53006, 53,
 	)
 	action, _ = runTCProgram(t, sharedIngress, respectedDNS)
 	if action != testTCActShot {

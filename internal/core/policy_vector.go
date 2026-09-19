@@ -19,6 +19,8 @@ type policyVector struct {
 	SharedBypassPort    bool
 	BypassIPv4          bool
 	BypassIPv6          bool
+	SharedBypassIPv4    bool
+	SharedBypassIPv6    bool
 	HostIPv4            bool
 	HostIPv6            bool
 	IncludeSource       bool
@@ -94,6 +96,12 @@ func (v policyVector) tcFlags() uint32 {
 	}
 	if v.SharedBypassPort {
 		flags |= tcFlagSharedBypassPort
+	}
+	if v.SharedBypassIPv4 {
+		flags |= tcFlagSharedBypassIPv4
+	}
+	if v.SharedBypassIPv6 {
+		flags |= tcFlagSharedBypassIPv6
 	}
 	return flags
 }

@@ -27,34 +27,46 @@ INLINE bool dhcp_packet(__u8 protocol, __u16 source_port, __u16 destination_port
 #define SB_SHARED_SOURCE_POLICY_FLAGS \
     (SB_SHARED_SOURCE_IP_POLICY_FLAGS | SB_SHARED_SOURCE_MAC_POLICY_FLAGS)
 
-INLINE bool ipv4_source_selected(const __u8 source[4], __u32 flags) {
-    if ((flags & (SB_SHARED_FLAG_INCLUDE_SOURCE | SB_SHARED_FLAG_EXCLUDE_SOURCE)) == 0U) return true;
+INLINE bool ipv4_source_excluded(const __u8 source[4], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE) == 0U) return false;
     struct sb_lpm4_key key = {.prefixlen = 32U};
     __builtin_memcpy(key.addr, source, 4U);
-    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE) != 0U &&
-        map_lookup(&shared_exclude_source_ipv4, &key) != 0) return false;
-    return (flags & SB_SHARED_FLAG_INCLUDE_SOURCE) == 0U ||
-        map_lookup(&shared_include_source_ipv4, &key) != 0;
+    return map_lookup(&shared_exclude_source_ipv4, &key) != 0;
 }
 
-INLINE bool ipv6_source_selected(const __u8 source[16], __u32 flags) {
-    if ((flags & (SB_SHARED_FLAG_INCLUDE_SOURCE | SB_SHARED_FLAG_EXCLUDE_SOURCE)) == 0U) return true;
+INLINE bool ipv4_source_included(const __u8 source[4], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_INCLUDE_SOURCE) == 0U) return false;
+    struct sb_lpm4_key key = {.prefixlen = 32U};
+    __builtin_memcpy(key.addr, source, 4U);
+    return map_lookup(&shared_include_source_ipv4, &key) != 0;
+}
+
+INLINE bool ipv6_source_excluded(const __u8 source[16], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE) == 0U) return false;
     struct sb_lpm6_key key = {.prefixlen = 128U};
     __builtin_memcpy(key.addr, source, 16U);
-    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE) != 0U &&
-        map_lookup(&shared_exclude_source_ipv6, &key) != 0) return false;
-    return (flags & SB_SHARED_FLAG_INCLUDE_SOURCE) == 0U ||
-        map_lookup(&shared_include_source_ipv6, &key) != 0;
+    return map_lookup(&shared_exclude_source_ipv6, &key) != 0;
 }
 
-INLINE bool source_mac_selected(const __u8 source[6], __u32 flags) {
-    if ((flags & (SB_SHARED_FLAG_INCLUDE_SOURCE_MAC | SB_SHARED_FLAG_EXCLUDE_SOURCE_MAC)) == 0U) return true;
+INLINE bool ipv6_source_included(const __u8 source[16], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_INCLUDE_SOURCE) == 0U) return false;
+    struct sb_lpm6_key key = {.prefixlen = 128U};
+    __builtin_memcpy(key.addr, source, 16U);
+    return map_lookup(&shared_include_source_ipv6, &key) != 0;
+}
+
+INLINE bool source_mac_excluded(const __u8 source[6], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE_MAC) == 0U) return false;
     struct sb_shared_mac_key key = {};
     __builtin_memcpy(key.address, source, 6U);
-    if ((flags & SB_SHARED_FLAG_EXCLUDE_SOURCE_MAC) != 0U &&
-        map_lookup(&shared_exclude_source_mac, &key) != 0) return false;
-    return (flags & SB_SHARED_FLAG_INCLUDE_SOURCE_MAC) == 0U ||
-        map_lookup(&shared_include_source_mac, &key) != 0;
+    return map_lookup(&shared_exclude_source_mac, &key) != 0;
+}
+
+INLINE bool source_mac_included(const __u8 source[6], __u32 flags) {
+    if ((flags & SB_SHARED_FLAG_INCLUDE_SOURCE_MAC) == 0U) return false;
+    struct sb_shared_mac_key key = {};
+    __builtin_memcpy(key.address, source, 6U);
+    return map_lookup(&shared_include_source_mac, &key) != 0;
 }
 
 INLINE bool shared_port_bypassed(__u8 protocol, __u16 destination_port) {
@@ -70,8 +82,11 @@ INLINE bool ipv4_client_selected(
     const __u8 source[4],
     const struct sb_shared_control *control) {
     __u32 flags = control->flags;
-    if ((flags & SB_SHARED_SOURCE_POLICY_FLAGS) == 0U) return true;
-    return source_mac_selected(source_mac, flags) && ipv4_source_selected(source, flags);
+    if (ipv4_source_excluded(source, flags) || source_mac_excluded(source_mac, flags)) return false;
+    if ((flags & (SB_SHARED_FLAG_INCLUDE_SOURCE | SB_SHARED_FLAG_INCLUDE_SOURCE_MAC)) == 0U) return true;
+    if ((flags & SB_SHARED_SOURCE_IP_POLICY_FLAGS) != 0U && ipv4_source_included(source, flags)) return true;
+    if ((flags & SB_SHARED_SOURCE_MAC_POLICY_FLAGS) != 0U && source_mac_included(source_mac, flags)) return true;
+    return false;
 }
 
 INLINE bool ipv6_client_selected(
@@ -79,8 +94,11 @@ INLINE bool ipv6_client_selected(
     const __u8 source[16],
     const struct sb_shared_control *control) {
     __u32 flags = control->flags;
-    if ((flags & SB_SHARED_SOURCE_POLICY_FLAGS) == 0U) return true;
-    return source_mac_selected(source_mac, flags) && ipv6_source_selected(source, flags);
+    if (ipv6_source_excluded(source, flags) || source_mac_excluded(source_mac, flags)) return false;
+    if ((flags & (SB_SHARED_FLAG_INCLUDE_SOURCE | SB_SHARED_FLAG_INCLUDE_SOURCE_MAC)) == 0U) return true;
+    if ((flags & SB_SHARED_SOURCE_IP_POLICY_FLAGS) != 0U && ipv6_source_included(source, flags)) return true;
+    if ((flags & SB_SHARED_SOURCE_MAC_POLICY_FLAGS) != 0U && source_mac_included(source_mac, flags)) return true;
+    return false;
 }
 
 NOINLINE __u8 shared_dns_policy(

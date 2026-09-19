@@ -295,6 +295,20 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 	}
 	return backend.UpdateCompiledBypassCIDR(policy)
 }
+func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+	backend := core.UnwrapTCBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized TC eBPF backend")
+	}
+	return backend.UpdateLocalCompiledBypassCIDR(policy)
+}
+func (b *TCBackend) UpdateSharedCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+	backend := core.UnwrapTCBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized TC eBPF backend")
+	}
+	return backend.UpdateSharedCompiledBypassCIDR(policy)
+}
 func (b *TCBackend) TCPListenerLookupMode() string {
 	return core.UnwrapTCBackend(b).TCPListenerLookupMode()
 }

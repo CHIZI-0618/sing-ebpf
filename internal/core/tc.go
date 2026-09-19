@@ -64,6 +64,8 @@ const tcFlagSharedIPv6 = 1 << 18
 const (
 	tcFlagLocalBypassPort  = 1 << 20
 	tcFlagSharedBypassPort = 1 << 21
+	tcFlagSharedBypassIPv4 = 1 << 22
+	tcFlagSharedBypassIPv6 = 1 << 23
 )
 
 const (
@@ -151,18 +153,20 @@ type tcRuntime struct {
 }
 
 type TCBackend struct {
-	access          sync.RWMutex
-	health          backendHealth
-	runtime         *tcRuntime
-	tcpListenerMap  bool
-	control         tcControl
-	controlMapFD    int
-	assignmentMapFD int
-	selfMapExternal bool
-	bypassIPv4      []netip.Prefix
-	bypassIPv6      []netip.Prefix
-	hostIPv4        [][4]byte
-	hostIPv6        [][16]byte
+	access           sync.RWMutex
+	health           backendHealth
+	runtime          *tcRuntime
+	tcpListenerMap   bool
+	control          tcControl
+	controlMapFD     int
+	assignmentMapFD  int
+	selfMapExternal  bool
+	bypassIPv4       []netip.Prefix
+	bypassIPv6       []netip.Prefix
+	sharedBypassIPv4 []netip.Prefix
+	sharedBypassIPv6 []netip.Prefix
+	hostIPv4         [][4]byte
+	hostIPv6         [][16]byte
 	// icmpEchoReply is nil unless TCConfig.ICMPEchoReply was set; see
 	// tc_icmp_echo_reply.go. It is a standalone backend (ICMPEchoReplyBackend) rather
 	// than fields inline here because shared.data_plane: packet_rewrite hosts
@@ -215,8 +219,10 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.LRUHash, maxEntries: config.AssignmentCapacity},
 		"tc_stats":               {name: "sb_tc_stats", mapType: CiliumEBPF.PerCPUArray, maxEntries: tcStatCount},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
-		"tc_bypass_ipv4":         {name: "sb_tc_bypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
-		"tc_bypass_ipv6":         {name: "sb_tc_bypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_local_bypass_ipv4":   {name: "sb_tc_lbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_local_bypass_ipv6":   {name: "sb_tc_lbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_shared_bypass_ipv4":  {name: "sb_tc_sbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_shared_bypass_ipv6":  {name: "sb_tc_sbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"tc_include_source_ipv4": {name: "sb_tc_insrc4", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(includeIPv4)), 1), flags: bpfFlagNoPrealloc},
 		"tc_include_source_ipv6": {name: "sb_tc_insrc6", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(includeIPv6)), 1), flags: bpfFlagNoPrealloc},
 		"tc_exclude_source_ipv4": {name: "sb_tc_exsrc4", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(excludeIPv4)), 1), flags: bpfFlagNoPrealloc},
@@ -640,6 +646,22 @@ func (b *TCBackend) Stats() (TCStats, error) {
 }
 
 func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+	return b.updateCompiledBypassCIDR(policy, false)
+}
+
+// UpdateLocalCompiledBypassCIDR updates only the destination CIDR bypass
+// policy used by the local TC path. Shared TC has its own independent maps.
+func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+	return b.updateCompiledBypassCIDR(policy, false)
+}
+
+// UpdateSharedCompiledBypassCIDR updates only the destination CIDR bypass
+// policy used by the shared TC path. Local TC has its own independent maps.
+func (b *TCBackend) UpdateSharedCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+	return b.updateCompiledBypassCIDR(policy, true)
+}
+
+func (b *TCBackend) updateCompiledBypassCIDR(policy BypassCIDRPolicy, shared bool) (bool, error) {
 	if len(policy.ipv4) > maxBypassCIDRPolicyEntries || len(policy.ipv6) > maxBypassCIDRPolicyEntries {
 		return false, E.New("TC eBPF bypass CIDR policy exceeds map capacity")
 	}
@@ -651,10 +673,18 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 	if err := b.requireUsableLocked(); err != nil {
 		return false, err
 	}
+	ipv4MapName, ipv6MapName := "tc_local_bypass_ipv4", "tc_local_bypass_ipv6"
+	previousIPv4, previousIPv6 := b.bypassIPv4, b.bypassIPv6
+	flagIPv4, flagIPv6 := uint32(1<<8), uint32(1<<9)
+	if shared {
+		ipv4MapName, ipv6MapName = "tc_shared_bypass_ipv4", "tc_shared_bypass_ipv6"
+		previousIPv4, previousIPv6 = b.sharedBypassIPv4, b.sharedBypassIPv6
+		flagIPv4, flagIPv6 = tcFlagSharedBypassIPv4, tcFlagSharedBypassIPv6
+	}
 	changed, err := replaceDualStackCIDRPolicy(
-		b.runtime.maps["tc_bypass_ipv4"],
-		b.runtime.maps["tc_bypass_ipv6"],
-		dualStackCIDRPrefixes{b.bypassIPv4, b.bypassIPv6},
+		b.runtime.maps[ipv4MapName],
+		b.runtime.maps[ipv6MapName],
+		dualStackCIDRPrefixes{previousIPv4, previousIPv6},
 		dualStackCIDRPrefixes(policy),
 		"TC ",
 		"bypass CIDR",
@@ -669,27 +699,31 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 		}
 		return false, err
 	}
-	previousIPv4, previousIPv6 := b.bypassIPv4, b.bypassIPv6
 	previousFlags := b.control.Flags
-	b.bypassIPv4 = slices.Clone(policy.ipv4)
-	b.bypassIPv6 = slices.Clone(policy.ipv6)
-	if len(b.bypassIPv4) > 0 {
-		b.control.Flags |= 1 << 8
+	if shared {
+		b.sharedBypassIPv4 = slices.Clone(policy.ipv4)
+		b.sharedBypassIPv6 = slices.Clone(policy.ipv6)
 	} else {
-		b.control.Flags &^= 1 << 8
+		b.bypassIPv4 = slices.Clone(policy.ipv4)
+		b.bypassIPv6 = slices.Clone(policy.ipv6)
 	}
-	if len(b.bypassIPv6) > 0 {
-		b.control.Flags |= 1 << 9
+	if len(policy.ipv4) > 0 {
+		b.control.Flags |= flagIPv4
 	} else {
-		b.control.Flags &^= 1 << 9
+		b.control.Flags &^= flagIPv4
+	}
+	if len(policy.ipv6) > 0 {
+		b.control.Flags |= flagIPv6
+	} else {
+		b.control.Flags &^= flagIPv6
 	}
 	if err = b.updateControlLocked(); err != nil {
 		// The policy maps are already live while the control flags that gate them
 		// are not, and the programs read the flag before the map, so leaving this
 		// half-applied changes what the data plane matches. Put the maps back.
 		_, restoreErr := replaceDualStackCIDRPolicy(
-			b.runtime.maps["tc_bypass_ipv4"],
-			b.runtime.maps["tc_bypass_ipv6"],
+			b.runtime.maps[ipv4MapName],
+			b.runtime.maps[ipv6MapName],
 			dualStackCIDRPrefixes(policy),
 			dualStackCIDRPrefixes{previousIPv4, previousIPv6},
 			"TC ",
@@ -705,7 +739,11 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 				policyUpdateError(err, restoreErr),
 			)
 		}
-		b.bypassIPv4, b.bypassIPv6 = previousIPv4, previousIPv6
+		if shared {
+			b.sharedBypassIPv4, b.sharedBypassIPv6 = previousIPv4, previousIPv6
+		} else {
+			b.bypassIPv4, b.bypassIPv6 = previousIPv4, previousIPv6
+		}
 		b.control.Flags = previousFlags
 		return false, err
 	}
@@ -899,6 +937,8 @@ func (b *TCBackend) Close() error {
 	b.selfMapExternal = false
 	b.bypassIPv4 = nil
 	b.bypassIPv6 = nil
+	b.sharedBypassIPv4 = nil
+	b.sharedBypassIPv6 = nil
 	b.hostIPv4 = nil
 	b.hostIPv6 = nil
 	return closeErr

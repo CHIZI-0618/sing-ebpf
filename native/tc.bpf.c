@@ -44,6 +44,8 @@
 #define SB_TC_FLAG_SHARED_BYPASS_PRIVATE (1U << 7)
 #define SB_TC_FLAG_BYPASS_IPV4 (1U << 8)
 #define SB_TC_FLAG_BYPASS_IPV6 (1U << 9)
+#define SB_TC_FLAG_LOCAL_BYPASS_IPV4 SB_TC_FLAG_BYPASS_IPV4
+#define SB_TC_FLAG_LOCAL_BYPASS_IPV6 SB_TC_FLAG_BYPASS_IPV6
 #define SB_TC_FLAG_FORCE_INTERCEPT_IPV4 (1U << 10)
 #define SB_TC_FLAG_FORCE_INTERCEPT_IPV6 (1U << 11)
 #define SB_TC_FLAG_INCLUDE_SOURCE (1U << 12)
@@ -55,6 +57,8 @@
 #define SB_TC_FLAG_SHARED_IPV6 (1U << 18)
 #define SB_TC_FLAG_LOCAL_BYPASS_PORT (1U << 20)
 #define SB_TC_FLAG_SHARED_BYPASS_PORT (1U << 21)
+#define SB_TC_FLAG_SHARED_BYPASS_IPV4 (1U << 22)
+#define SB_TC_FLAG_SHARED_BYPASS_IPV6 (1U << 23)
 
 #define SB_TC_SOCKET_POLICY_BYPASS 1U
 #define SB_TC_SOCKET_POLICY_INTERCEPT 2U
@@ -229,8 +233,10 @@ MAP(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_T
 MAP(tc_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_TC_STAT_COUNT);
 MAP(tc_self_sockets, __u64, __u32, BPF_MAP_TYPE_LRU_HASH, 65536U);
 MAP(tc_uid_policy, struct sb_tc_uid_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
-MAP(tc_bypass_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
-MAP(tc_bypass_ipv6, struct sb_tc_ipv6_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
+MAP(tc_local_bypass_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
+MAP(tc_local_bypass_ipv6, struct sb_tc_ipv6_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
+MAP(tc_shared_bypass_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
+MAP(tc_shared_bypass_ipv6, struct sb_tc_ipv6_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
 MAP(tc_include_source_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
 MAP(tc_include_source_ipv6, struct sb_tc_ipv6_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
 MAP(tc_exclude_source_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
@@ -365,17 +371,23 @@ INLINE bool force_intercept_destination(const struct sb_tc_control *control,
 }
 
 INLINE bool bypass_destination(const struct sb_tc_control *control,
-    const struct sb_tc_assign_key *flow) {
+    const struct sb_tc_assign_key *flow, bool shared) {
     if (flow->family == AF_INET_VALUE) {
-        if ((control->flags & SB_TC_FLAG_BYPASS_IPV4) == 0U) return false;
+        __u32 flag = shared ? SB_TC_FLAG_SHARED_BYPASS_IPV4 : SB_TC_FLAG_LOCAL_BYPASS_IPV4;
+        if ((control->flags & flag) == 0U) return false;
         struct sb_tc_ipv4_lpm_key key = {.prefixlen = 32U};
         __builtin_memcpy(key.address, flow->destination_addr, 4U);
-        return map_lookup(&tc_bypass_ipv4, &key) != 0;
+        return shared
+            ? map_lookup(&tc_shared_bypass_ipv4, &key) != 0
+            : map_lookup(&tc_local_bypass_ipv4, &key) != 0;
     }
-    if ((control->flags & SB_TC_FLAG_BYPASS_IPV6) == 0U) return false;
+    __u32 flag = shared ? SB_TC_FLAG_SHARED_BYPASS_IPV6 : SB_TC_FLAG_LOCAL_BYPASS_IPV6;
+    if ((control->flags & flag) == 0U) return false;
     struct sb_tc_ipv6_lpm_key key = {.prefixlen = 128U};
     __builtin_memcpy(key.address, flow->destination_addr, 16U);
-    return map_lookup(&tc_bypass_ipv6, &key) != 0;
+    return shared
+        ? map_lookup(&tc_shared_bypass_ipv6, &key) != 0
+        : map_lookup(&tc_local_bypass_ipv6, &key) != 0;
 }
 
 INLINE bool source_address_selected(const struct sb_tc_control *control,
@@ -430,7 +442,7 @@ INLINE bool local_selected(struct __sk_buff *skb, const struct sb_tc_control *co
     if (port_bypassed(control, key, false)) return false;
     if (host_destination(control, key)) return false;
     if ((control->flags & SB_TC_FLAG_LOCAL_BYPASS_PRIVATE) != 0U && private_destination(key)) return false;
-    return !bypass_destination(control, key);
+    return !bypass_destination(control, key, false);
 }
 
 INLINE bool shared_selected(const struct sb_tc_control *control,
@@ -443,7 +455,7 @@ INLINE bool shared_selected(const struct sb_tc_control *control,
     if (port_bypassed(control, key, true)) return false;
     if (host_destination(control, key)) return false;
     if ((control->flags & SB_TC_FLAG_SHARED_BYPASS_PRIVATE) != 0U && private_destination(key)) return false;
-    return !bypass_destination(control, key);
+    return !bypass_destination(control, key, true);
 }
 
 INLINE bool parse_ethernet(void *data, void *data_end, __u16 *protocol, __u32 *l3_offset, __u8 source_mac[6]) {

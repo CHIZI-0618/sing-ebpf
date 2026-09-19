@@ -81,7 +81,7 @@ type SharedPacketRewriteBackend struct {
 	icmpEchoReply *ICMPEchoReplyBackend
 }
 
-func PrepareSharedPacketRewrite(cgroupBackend *CgroupBackend, config SharedPacketRewriteConfig) (*SharedPacketRewriteBackend, error) {
+func PrepareSharedPacketRewrite(_ *CgroupBackend, config SharedPacketRewriteConfig) (*SharedPacketRewriteBackend, error) {
 	redirectIPv4 := config.RedirectIPv4
 	redirectIPv6 := config.RedirectIPv6
 	policy := config.Policy
@@ -130,17 +130,11 @@ func PrepareSharedPacketRewrite(cgroupBackend *CgroupBackend, config SharedPacke
 		ingress_prog_fd:             -1,
 		egress_prog_fd:              -1,
 	}
+	// Shared policy maps are owned by the shared backend. They must not alias
+	// the local cgroup maps: local and shared rule-sets are independent policy
+	// scopes and may intentionally contain different destination CIDRs.
 	var bypassIPv4Map *CiliumEBPF.Map
 	var bypassIPv6Map *CiliumEBPF.Map
-	if cgroupBackend != nil {
-		cgroupBackend.access.RLock()
-		if err := cgroupBackend.health.requireUsable(cgroupBackend.runtime != nil); err != nil {
-			cgroupBackend.access.RUnlock()
-			return nil, err
-		}
-		bypassIPv4Map = cgroupBackend.runtime.maps["cgroup_bypass_ipv4"]
-		bypassIPv6Map = cgroupBackend.runtime.maps["cgroup_bypass_ipv6"]
-	}
 	err = prepareSharedNetworkRuntime(
 		runtimeState,
 		config.MapCapacity,
@@ -150,9 +144,6 @@ func PrepareSharedPacketRewrite(cgroupBackend *CgroupBackend, config SharedPacke
 		bypassIPv4Map,
 		bypassIPv6Map,
 	)
-	if cgroupBackend != nil {
-		cgroupBackend.access.RUnlock()
-	}
 	if err != nil {
 		_ = closeObjectResources(runtimeState.programs, runtimeState.maps)
 		prepareErr := eBPFBackendOperationError(
