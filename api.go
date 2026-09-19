@@ -199,19 +199,21 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 }
 
 type ProcessTrackerConfig struct {
-	EnableTCP   bool
-	EnableUDP   bool
-	EnableIPv6  bool
-	LocalPolicy LocalPolicy
-	SelfBypass  *SelfBypass
+	EnableTCP    bool
+	EnableUDP    bool
+	EnableIPv6   bool
+	UIDDecisions []UIDDecision
+	Default      Decision
+	SelfBypass   *SelfBypass
 }
 
 func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) {
 	return core.AttachProcessTrackerWithSelfBypass(core.ProcessTrackerConfig{
-		EnableTCP:   config.EnableTCP,
-		EnableUDP:   config.EnableUDP,
-		EnableIPv6:  config.EnableIPv6,
-		LocalPolicy: config.LocalPolicy,
+		EnableTCP:    config.EnableTCP,
+		EnableUDP:    config.EnableUDP,
+		EnableIPv6:   config.EnableIPv6,
+		UIDDecisions: config.UIDDecisions,
+		Default:      config.Default,
 	}, config.SelfBypass)
 }
 
@@ -304,6 +306,27 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 		return false, errors.New("uninitialized TC eBPF backend")
 	}
 	return backend.UpdateCompiledBypassCIDR(policy)
+}
+
+// UpdateLocalDestinationDecisions applies final destination actions to the
+// local TC path. The backend accepts only pass entries for this mutable map;
+// intercept decisions remain part of the immutable startup policy.
+func (b *TCBackend) UpdateLocalDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	backend := core.UnwrapTCBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized TC eBPF backend")
+	}
+	return backend.UpdateLocalDestinationDecisions(decisions)
+}
+
+// UpdateSharedDestinationDecisions applies final destination actions to the
+// shared TC path.
+func (b *TCBackend) UpdateSharedDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	backend := core.UnwrapTCBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized TC eBPF backend")
+	}
+	return backend.UpdateSharedDestinationDecisions(decisions)
 }
 func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
 	backend := core.UnwrapTCBackend(b)
@@ -418,6 +441,16 @@ func (b *SharedPacketRewriteBackend) UpdateHostAddresses(addresses []netip.Addr)
 }
 func (b *SharedPacketRewriteBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
 	return core.UnwrapSharedPacketRewriteBackend(b).UpdateCompiledBypassCIDR(policy)
+}
+
+// UpdateDestinationDecisions applies final destination actions to the shared
+// packet-rewrite path.
+func (b *SharedPacketRewriteBackend) UpdateDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	backend := core.UnwrapSharedPacketRewriteBackend(b)
+	if backend == nil {
+		return false, errors.New("uninitialized shared packet-rewrite eBPF backend")
+	}
+	return backend.UpdateDestinationDecisions(decisions)
 }
 func (b *SharedPacketRewriteBackend) SetBypassCIDRState(ipv4Count, ipv6Count int) error {
 	return core.UnwrapSharedPacketRewriteBackend(b).SetBypassCIDRState(ipv4Count, ipv6Count)

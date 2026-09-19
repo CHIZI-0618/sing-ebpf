@@ -57,6 +57,17 @@ func (b *CgroupBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool,
 	return changed, nil
 }
 
+// UpdateDestinationDecisions applies final pass decisions to the local
+// cgroup destination maps. The caller has already evaluated all configuration
+// and rule-set semantics; this low-level backend only stores the pass action.
+func (b *CgroupBackend) UpdateDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	policy, err := compileDestinationPassDecisions(decisions)
+	if err != nil {
+		return false, err
+	}
+	return b.UpdateCompiledBypassCIDR(policy)
+}
+
 func (b *CgroupBackend) BypassCIDRCount() (int, int) {
 	if b == nil {
 		return 0, 0

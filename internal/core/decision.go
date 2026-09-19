@@ -2,7 +2,11 @@
 
 package core
 
-import "net/netip"
+import (
+	"net/netip"
+
+	E "github.com/sagernet/sing/common/exceptions"
+)
 
 // Decision is the only policy result understood by sing-ebpf. The library
 // does not interpret why a rule was selected (for example DNS, FakeIP,
@@ -64,4 +68,18 @@ type ActionPolicy struct {
 	EnableUDP bool
 	Local     ActionScope
 	Shared    ActionScope
+}
+
+func compileDestinationPassDecisions(decisions []CIDRDecision) (BypassCIDRPolicy, error) {
+	prefixes := make([]netip.Prefix, 0, len(decisions))
+	for _, decision := range decisions {
+		if !decision.Prefix.IsValid() || !decision.Action.Valid() {
+			return BypassCIDRPolicy{}, E.New("invalid eBPF destination decision")
+		}
+		if decision.Action != DecisionPass {
+			return BypassCIDRPolicy{}, E.New("destination decision updates require pass actions")
+		}
+		prefixes = append(prefixes, decision.Prefix)
+	}
+	return CompileBypassCIDRPolicy(prefixes)
 }

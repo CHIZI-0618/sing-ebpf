@@ -30,11 +30,12 @@ const (
 )
 
 type ProcessTrackerConfig struct {
-	EnableTCP   bool
-	EnableUDP   bool
-	EnableIPv6  bool
-	LocalPolicy LocalPolicy
-	MetadataMap *CiliumEBPF.Map
+	EnableTCP    bool
+	EnableUDP    bool
+	EnableIPv6   bool
+	UIDDecisions []UIDDecision
+	Default      Decision
+	MetadataMap  *CiliumEBPF.Map
 }
 
 type ProcessSocketOwner struct {
@@ -81,7 +82,7 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 	if err != nil {
 		return nil, E.Cause(err, "create eBPF process owner map")
 	}
-	uidEntries, defaultBypass, err := compileUIDPolicy(config.LocalPolicy)
+	uidEntries, defaultBypass, err := compileUIDDecisions(config.UIDDecisions, config.Default)
 	if err != nil {
 		_ = owners.Close()
 		return nil, err
@@ -134,6 +135,30 @@ func AttachProcessTracker(config ProcessTrackerConfig) (*ProcessTracker, error) 
 	}
 	tracker.attachReleaseCleanup(cgroupPath)
 	return tracker, nil
+}
+
+// compileUIDDecisions converts final action decisions into the membership map
+// used by the tracker. The map stores only actions different from Default;
+// the kernel program treats a match as the inverse of the default action.
+// This keeps sing-ebpf independent from sing-box's include/exclude semantics.
+func compileUIDDecisions(decisions []UIDDecision, defaultDecision Decision) ([]uidLPMKey, bool, error) {
+	if !defaultDecision.Valid() {
+		return nil, false, E.New("invalid eBPF process tracker default action")
+	}
+	var ranges []UIDRange
+	for _, decision := range decisions {
+		if decision.Start > decision.End || !decision.Action.Valid() {
+			return nil, false, E.New("invalid eBPF process tracker UID decision")
+		}
+		if decision.Action != defaultDecision {
+			ranges = append(ranges, UIDRange{Start: decision.Start, End: decision.End})
+		}
+	}
+	entries := compileUIDRanges(normalizeUIDRanges(ranges))
+	if len(entries) > maxUIDPolicyEntries {
+		return nil, false, E.New("UID policy compiles to too many eBPF map entries: ", len(entries), " > ", maxUIDPolicyEntries)
+	}
+	return entries, defaultDecision == DecisionPass, nil
 }
 
 // rollbackProcessTracker returns the tracker together with the startup error

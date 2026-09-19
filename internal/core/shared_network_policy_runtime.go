@@ -159,6 +159,16 @@ func (b *SharedPacketRewriteBackend) UpdateCompiledBypassCIDR(policy BypassCIDRP
 	return changed, nil
 }
 
+// UpdateDestinationDecisions applies final shared pass decisions to the
+// packet-rewrite destination maps.
+func (b *SharedPacketRewriteBackend) UpdateDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	policy, err := compileDestinationPassDecisions(decisions)
+	if err != nil {
+		return false, err
+	}
+	return b.UpdateCompiledBypassCIDR(policy)
+}
+
 func (b *SharedPacketRewriteBackend) BypassCIDRCount() (int, int) {
 	if b == nil {
 		return 0, 0

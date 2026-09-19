@@ -665,6 +665,26 @@ func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, err
 	return b.updateCompiledBypassCIDR(policy, false)
 }
 
+// UpdateLocalDestinationDecisions applies final local pass decisions. The
+// backend does not interpret the reason for a pass action.
+func (b *TCBackend) UpdateLocalDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	policy, err := compileDestinationPassDecisions(decisions)
+	if err != nil {
+		return false, err
+	}
+	return b.UpdateLocalCompiledBypassCIDR(policy)
+}
+
+// UpdateSharedDestinationDecisions applies final shared pass decisions. The
+// backend does not interpret the reason for a pass action.
+func (b *TCBackend) UpdateSharedDestinationDecisions(decisions []CIDRDecision) (bool, error) {
+	policy, err := compileDestinationPassDecisions(decisions)
+	if err != nil {
+		return false, err
+	}
+	return b.UpdateSharedCompiledBypassCIDR(policy)
+}
+
 // UpdateLocalCompiledBypassCIDR updates only the destination CIDR bypass
 // policy used by the local TC path. Shared TC has its own independent maps.
 func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
