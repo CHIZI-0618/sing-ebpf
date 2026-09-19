@@ -5,9 +5,11 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 	"unsafe"
@@ -70,6 +72,183 @@ func TestCgroupProgramMatrixIntegration(t *testing.T) {
 				assertCgroupUDPMapHandoff(t, backend)
 			}
 		})
+	}
+}
+
+// TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass exercises the real
+// sendmsg4 hook. It first verifies an uncached direct socket, then plants a
+// proxy action for a second socket's exact cookie/five-tuple and verifies that
+// the configured UID bypass still wins. This is intentionally an integration
+// test: a source-order assertion would not catch an object-generation or
+// verifier regression.
+func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
+	requireEBPFIntegration(t, "test cgroup UDP UID/cache precedence")
+	cgroupRoot, err := DetectCgroup2Root()
+	if err != nil {
+		t.Skipf("cgroup v2 is unavailable: %v", err)
+	}
+	path, dedicated := createIntegrationCgroup(t, cgroupRoot, 100)
+	if !dedicated {
+		t.Skip("cannot create a dedicated cgroup")
+	}
+	uid := uint32(os.Geteuid())
+	policy, err := CompilePolicy(PolicyConfig{
+		EnableUDP: true,
+		Local: LocalPolicy{
+			DNSMode:              DNSModeRespectPolicy,
+			IncludeUIDConfigured: true,
+			IncludeUID:           []UIDRange{{Start: uid, End: uid}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfBypassMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
+		Type:       CiliumEBPF.LRUHash,
+		KeySize:    8,
+		ValueSize:  4,
+		MaxEntries: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer selfBypassMap.Close()
+	backend, err := PrepareCgroup(CgroupConfig{
+		Path:          path,
+		EnableUDP:     true,
+		RedirectIPv4:  netip.MustParsePrefix("127.128.0.0/9"),
+		MapCapacity:   CgroupMapCapacity{UDPRedirect: 64, UDPPeer: 64, UDPFlow: 64, SocketBypass: 8},
+		UDPTimeout:    time.Minute,
+		Policy:        policy,
+		SelfBypassMap: selfBypassMap,
+	})
+	if err != nil {
+		if cgroupIntegrationUnavailable(err) {
+			t.Skipf("cgroup eBPF is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	const listenerPort = 41000
+	if err = backend.LoadPrograms(listenerPort); err != nil {
+		if cgroupIntegrationUnavailable(err) {
+			t.Skipf("cgroup program loading is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if err = backend.Attach(); err != nil {
+		if cgroupIntegrationUnavailable(err) {
+			t.Skipf("cgroup program attach is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	moveCurrentProcessToCgroup(t, path, cgroupRoot)
+
+	target, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	token, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 128, 0, 1), Port: listenerPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	targetAddr := target.LocalAddr().(*net.UDPAddr)
+
+	// A new socket has no flow-cache entry and must reach the real target.
+	direct, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	if _, err = direct.WriteToUDP([]byte("direct"), targetAddr); err != nil {
+		t.Fatal(err)
+	}
+	assertUDPReceived(t, target, "direct")
+
+	cached, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+	cookie, err := udpSocketCookie(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowKey := udpFlowKey{SocketCookie: cookie, Family: addressFamilyIPv4, Protocol: ProtocolUDP, Port: uint16(targetAddr.Port)}
+	copy(flowKey.Addr[:4], targetAddr.IP.To4())
+	flowValue := udpFlowValue{
+		Action:            udpFlowActionProxy,
+		LastSeenSeconds:   uint32(time.Now().Unix()),
+		NetworkGeneration: backend.networkGeneration,
+		Listener: listenerLookupKey{
+			Family:       addressFamilyIPv4,
+			Protocol:     ProtocolUDP,
+			ListenerPort: listenerPort,
+		},
+	}
+	copy(flowValue.Listener.TokenAddr[:4], net.IPv4(127, 128, 0, 1).To4())
+	if err = backend.runtime.maps["cgroup_udp_flow"].Update(&flowKey, &flowValue, CiliumEBPF.UpdateAny); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cached.WriteToUDP([]byte("cached"), targetAddr); err != nil {
+		t.Fatal(err)
+	}
+	assertUDPReceived(t, target, "cached")
+	assertUDPNotReceived(t, token)
+}
+
+func moveCurrentProcessToCgroup(t *testing.T, path, root string) {
+	t.Helper()
+	pid := []byte(strconv.Itoa(os.Getpid()))
+	if err := os.WriteFile(filepath.Join(path, "cgroup.procs"), pid, 0o644); err != nil {
+		t.Skipf("cannot move integration process into cgroup: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(root, "cgroup.procs"), pid, 0o644)
+	})
+}
+
+func udpSocketCookie(conn *net.UDPConn) (uint64, error) {
+	var cookie uint64
+	var controlErr error
+	rawConn, err := conn.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	err = rawConn.Control(func(fd uintptr) {
+		cookie, controlErr = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return cookie, controlErr
+}
+
+func assertUDPReceived(t *testing.T, conn *net.UDPConn, want string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	buffer := make([]byte, 64)
+	n, _, err := conn.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buffer[:n]) != want {
+		t.Fatalf("received %q, want %q", buffer[:n], want)
+	}
+}
+
+func assertUDPNotReceived(t *testing.T, conn *net.UDPConn) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buffer := make([]byte, 64)
+	if n, _, err := conn.ReadFromUDP(buffer); err == nil {
+		t.Fatalf("unexpected redirected packet %q", buffer[:n])
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, unix.EAGAIN) {
+		// The net package may wrap EAGAIN as a timeout error; accept only those
+		// two forms so real socket failures remain visible.
+		t.Fatalf("unexpected token socket read error: %v", err)
 	}
 }
 

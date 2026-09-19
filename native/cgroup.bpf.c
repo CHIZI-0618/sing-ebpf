@@ -618,6 +618,11 @@ INLINE int handle_v4(
     }
     __u8 flow_address[16] = {0};
     __builtin_memcpy(flow_address, &destination, sizeof(destination));
+    // UID policy is per socket operation.  It must precede the UDP flow cache:
+    // Android resolver/netd may reuse a socket identity for requests with
+    // different policy owners, and a cached proxy action must not override
+    // respect_policy's UID bypass decision.
+    if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
     if (!connect_hook) {
         int cached = flow_action(
             ctx, config, AF_INET_VALUE, protocol, port, flow_address, cookie, false,
@@ -625,7 +630,6 @@ INLINE int handle_v4(
         if (cached == FLOW_CACHE_PROXY ||
             (!force_intercept && !intercept_dns && cached == FLOW_CACHE_BYPASS)) return 1;
     }
-    if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
     if (!force_intercept && !intercept_dns) {
         if (port_bypassed(config, protocol, port)) return 1;
         if ((config->flags & SB_EBPF_CGROUP_FLAG_HOST_IPV4) != 0U && host_ipv4(destination)) return 1;
@@ -720,6 +724,9 @@ INLINE int handle_v6(
         }
         __u8 flow_address[16] = {0};
         __builtin_memcpy(flow_address, &destination, sizeof(destination));
+        // UID policy is per socket operation; do not let a cached UDP proxy
+        // decision bypass respect_policy for a different policy owner.
+        if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
         if (!connect_hook) {
             int cached = flow_action(
                 ctx, config, AF_INET_VALUE, protocol, port, flow_address, cookie, true,
@@ -727,7 +734,6 @@ INLINE int handle_v6(
             if (cached == FLOW_CACHE_PROXY ||
                 (!force_intercept && !intercept_dns && cached == FLOW_CACHE_BYPASS)) return 1;
         }
-        if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
         if (!force_intercept && !intercept_dns) {
             if (port_bypassed(config, protocol, port)) return 1;
             if ((config->flags & SB_EBPF_CGROUP_FLAG_HOST_IPV4) != 0U && host_ipv4(destination)) return 1;
@@ -793,6 +799,9 @@ INLINE int handle_v6(
     }
     __u8 flow_address[16];
     __builtin_memcpy(flow_address, address, sizeof(flow_address));
+    // UID policy is per socket operation; do not let a cached UDP proxy
+    // decision bypass respect_policy for a different policy owner.
+    if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
     if (!connect_hook) {
         int cached = flow_action(
             ctx, config, AF_INET6_VALUE, protocol, port, flow_address, cookie, false,
@@ -800,7 +809,6 @@ INLINE int handle_v6(
         if (cached == FLOW_CACHE_PROXY ||
             (!force_intercept && !intercept_dns && cached == FLOW_CACHE_BYPASS)) return 1;
     }
-    if (!force_intercept && !force_dns && uid_bypassed(config)) return 1;
     if (!force_intercept && !intercept_dns) {
         if (port_bypassed(config, protocol, port)) return 1;
         if ((config->flags & SB_EBPF_CGROUP_FLAG_HOST_IPV6) != 0U && host_ipv6(address)) return 1;
