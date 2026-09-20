@@ -14,6 +14,8 @@ prefixes and never reads or maintains an application's address mappings.
 
 The API is currently experimental. Architecture, dependency policy, and
 lifecycle invariants are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+The final-action policy boundary and consumer integration contract are in
+[DECISION_MODEL.md](DECISION_MODEL.md).
 Build, generation, testing, debugging, and contribution procedures are in
 [DEVELOPING.md](DEVELOPING.md).
 

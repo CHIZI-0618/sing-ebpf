@@ -15,6 +15,26 @@ The generic rule primitives in `decision.go` are deliberately limited to the
 match key and the final action. A rule does not carry an `include`, `exclude`,
 `bypass`, or `hijack` meaning. Those are sing-box policy concepts.
 
+## Consumer integration contract
+
+The `ActionPolicy` shape is a transport for final actions, not a second
+configuration schema. The consumer must construct only the fields supported by
+the selected data planes:
+
+| Scope | Supported final-action inputs | Owned by the consumer |
+| --- | --- | --- |
+| local | UID, destination CIDR, destination port | UID/package selection, DNS/FakeIP/private/rule-set priority |
+| shared | source CIDR, source MAC, destination CIDR, destination port | downstream selection and source-policy meaning |
+
+The current sing-box adapter enforces this mapping before calling the library:
+local source CIDR/MAC and shared UID decisions are invalid for its four data
+paths. Other consumers must apply the same integration-side validation rather
+than relying on sing-ebpf to interpret or reject application scope semantics.
+
+The library still validates every primitive action, range, prefix, protocol,
+capacity, and ABI constraint that it can express. It does not validate whether
+a valid primitive belongs to a particular application's local/shared model.
+
 ## Runtime status
 
 All four data paths now have action-level update entry points:
