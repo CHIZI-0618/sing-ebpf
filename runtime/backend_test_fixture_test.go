@@ -10,7 +10,11 @@ import (
 
 func newLoopbackTestTCBackend(t *testing.T) *core.TCBackend {
 	t.Helper()
-	policy, err := core.CompilePolicy(core.PolicyConfig{EnableTCP: true})
+	policy, err := core.CompileActionPolicy(core.ActionPolicy{
+		EnableTCP: true,
+		Local:     core.ActionScope{Default: core.DecisionIntercept},
+		Shared:    core.ActionScope{Default: core.DecisionIntercept},
+	})
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}

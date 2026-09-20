@@ -58,11 +58,10 @@ func TestCompileFullUIDRange(t *testing.T) {
 }
 
 func TestCompileUIDPolicyPrecedence(t *testing.T) {
-	entries, defaultBypass, err := compileUIDPolicy(LocalPolicy{
-		IncludeUIDConfigured: true,
-		IncludeUID:           []UIDRange{{Start: 1000, End: 1999}},
-		ExcludeUID:           []UIDRange{{Start: 1200, End: 1299}},
-	})
+	entries, defaultBypass, err := compileUIDActionPolicy([]UIDDecision{
+		{Start: 1000, End: 1199, Action: DecisionIntercept},
+		{Start: 1300, End: 1999, Action: DecisionIntercept},
+	}, DecisionPass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +81,7 @@ func TestCompileUIDPolicyPrecedence(t *testing.T) {
 }
 
 func TestCompileEmptyConfiguredUIDPolicy(t *testing.T) {
-	entries, defaultBypass, err := compileUIDPolicy(LocalPolicy{IncludeUIDConfigured: true})
+	entries, defaultBypass, err := compileUIDActionPolicy(nil, DecisionPass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +91,7 @@ func TestCompileEmptyConfiguredUIDPolicy(t *testing.T) {
 }
 
 func TestCompileExcludeOnlyUIDPolicy(t *testing.T) {
-	entries, defaultBypass, err := compileUIDPolicy(LocalPolicy{
-		ExcludeUID: []UIDRange{{Start: 1000, End: 1999}},
-	})
+	entries, defaultBypass, err := compileUIDActionPolicy([]UIDDecision{{Start: 1000, End: 1999, Action: DecisionPass}}, DecisionIntercept)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,9 +101,7 @@ func TestCompileExcludeOnlyUIDPolicy(t *testing.T) {
 }
 
 func TestCompileUID1052UsesConfiguredPolicy(t *testing.T) {
-	entries, defaultBypass, err := compileUIDPolicy(LocalPolicy{
-		ExcludeUID: []UIDRange{{Start: 1052, End: 1052}},
-	})
+	entries, defaultBypass, err := compileUIDActionPolicy([]UIDDecision{{Start: 1052, End: 1052, Action: DecisionPass}}, DecisionIntercept)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,10 +109,7 @@ func TestCompileUID1052UsesConfiguredPolicy(t *testing.T) {
 		t.Fatalf("UID 1052 was not handled as a configured exclusion: default_bypass=%v entries=%v", defaultBypass, entries)
 	}
 
-	entries, defaultBypass, err = compileUIDPolicy(LocalPolicy{
-		IncludeUIDConfigured: true,
-		IncludeUID:           []UIDRange{{Start: 1052, End: 1052}},
-	})
+	entries, defaultBypass, err = compileUIDActionPolicy([]UIDDecision{{Start: 1052, End: 1052, Action: DecisionIntercept}}, DecisionPass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +118,8 @@ func TestCompileUID1052UsesConfiguredPolicy(t *testing.T) {
 	}
 }
 
-func TestCompileBypassCIDRPolicy(t *testing.T) {
-	ipv4, ipv6, err := compileBypassCIDRPolicy([]netip.Prefix{
+func TestCompileCIDRPrefixes(t *testing.T) {
+	ipv4, ipv6, err := compileCIDRPrefixes([]netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/9"),
 		netip.MustParsePrefix("10.128.0.0/9"),
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -148,20 +140,24 @@ func TestCompileBypassCIDRPolicy(t *testing.T) {
 	}
 }
 
-func TestCompilePolicySnapshot(t *testing.T) {
-	includeUID := []UIDRange{{Start: 1000, End: 1002}}
+func TestCompileActionPolicySnapshot(t *testing.T) {
+	includeUID := []UIDDecision{{Start: 1000, End: 1002, Action: DecisionIntercept}}
 	includeSource := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 	includeMAC := []MACAddress{{0x02, 0, 0, 0, 0, 1}}
-	policy, err := CompilePolicy(PolicyConfig{
-		EnableTCP:           true,
-		EnableUDP:           true,
-		Local:               LocalPolicy{IncludeUID: includeUID},
-		SharedDNSMode:       DNSModeRespectPolicy,
-		SharedBypassPrivate: true,
-		ForceInterceptIPv4:  netip.MustParsePrefix("198.18.1.1/15"),
-		IncludeSourceCIDR:   includeSource,
-		IncludeSourceMAC:    includeMAC,
-		LocalBypassPort:     []PortRange{{Start: 443, End: 443}},
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		EnableUDP: true,
+		Local: ActionScope{
+			Default:         DecisionPass,
+			UID:             includeUID,
+			DestinationCIDR: []CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.1.1/15"), Action: DecisionIntercept}},
+			DestinationPort: []PortDecision{{Protocol: ProtocolTCP, Port: 443, Action: DecisionPass}, {Protocol: ProtocolUDP, Port: 443, Action: DecisionPass}},
+		},
+		Shared: ActionScope{
+			Default:    DecisionIntercept,
+			SourceCIDR: []CIDRDecision{{Prefix: includeSource[0], Action: DecisionIntercept}},
+			SourceMAC:  []MACDecision{{Address: includeMAC[0], Action: DecisionIntercept}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,14 +173,14 @@ func TestCompilePolicySnapshot(t *testing.T) {
 	includeUID[0].Start = 2000
 	includeSource[0] = netip.MustParsePrefix("203.0.113.0/24")
 	includeMAC[0][0] = 0x06
-	if policy.local.IncludeUID[0].Start != 1000 ||
+	if policy.uidDefaultBypass == false ||
 		policy.includeSource.ipv4[0] != netip.MustParsePrefix("192.0.2.0/24") ||
 		policy.includeSourceMAC[0][0] != 0x02 {
 		t.Fatal("compiled policy retained mutable input slices")
 	}
 }
 
-func TestBypassCIDRPolicyDelta(t *testing.T) {
+func TestDestinationCIDRPolicyDelta(t *testing.T) {
 	current := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
 		netip.MustParsePrefix("192.0.2.0/24"),
@@ -193,7 +189,7 @@ func TestBypassCIDRPolicyDelta(t *testing.T) {
 		netip.MustParsePrefix("10.0.0.0/8"),
 		netip.MustParsePrefix("198.51.100.0/24"),
 	}
-	additions, removals := bypassCIDRPolicyDelta(current, next)
+	additions, removals := destinationCIDRPolicyDelta(current, next)
 	if !equalPrefixes(additions, next[1:]) || !equalPrefixes(removals, current[1:]) {
 		t.Fatalf("unexpected CIDR delta: additions=%v removals=%v", additions, removals)
 	}

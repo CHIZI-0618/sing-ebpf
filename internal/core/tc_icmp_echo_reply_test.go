@@ -12,14 +12,18 @@ import (
 // prepareTC's own validation requires.
 func newTestForceInterceptPolicy(t *testing.T, forceInterceptIPv4, forceInterceptIPv6 string) CompiledPolicy {
 	t.Helper()
-	config := PolicyConfig{EnableTCP: true}
+	config := ActionPolicy{
+		EnableTCP: true,
+		Local:     ActionScope{Default: DecisionIntercept},
+		Shared:    ActionScope{Default: DecisionIntercept},
+	}
 	if forceInterceptIPv4 != "" {
-		config.ForceInterceptIPv4 = netip.MustParsePrefix(forceInterceptIPv4)
+		config.Local.DestinationCIDR = append(config.Local.DestinationCIDR, CIDRDecision{Prefix: netip.MustParsePrefix(forceInterceptIPv4), Action: DecisionIntercept})
 	}
 	if forceInterceptIPv6 != "" {
-		config.ForceInterceptIPv6 = netip.MustParsePrefix(forceInterceptIPv6)
+		config.Local.DestinationCIDR = append(config.Local.DestinationCIDR, CIDRDecision{Prefix: netip.MustParsePrefix(forceInterceptIPv6), Action: DecisionIntercept})
 	}
-	policy, err := CompilePolicy(config)
+	policy, err := CompileActionPolicy(config)
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}

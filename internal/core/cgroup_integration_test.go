@@ -92,13 +92,13 @@ func TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass(t *testing.T) {
 		t.Skip("cannot create a dedicated cgroup")
 	}
 	uid := uint32(os.Geteuid())
-	policy, err := CompilePolicy(PolicyConfig{
+	policy, err := CompileActionPolicy(ActionPolicy{
 		EnableUDP: true,
-		Local: LocalPolicy{
-			DNSMode:              DNSModeRespectPolicy,
-			IncludeUIDConfigured: true,
-			IncludeUID:           []UIDRange{{Start: uid, End: uid}},
+		Local: ActionScope{
+			Default: DecisionPass,
+			UID:     []UIDDecision{{Start: uid, End: uid, Action: DecisionIntercept}},
 		},
+		Shared: ActionScope{Default: DecisionIntercept},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,12 +280,16 @@ func prepareCgroupIntegrationBackend(path string, enableTCP, enableUDP, enableIP
 	if err != nil {
 		return nil, err
 	}
-	policy, err := CompilePolicy(PolicyConfig{EnableTCP: enableTCP, EnableUDP: enableUDP})
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: enableTCP,
+		EnableUDP: enableUDP,
+		Local:     ActionScope{Default: DecisionIntercept},
+		Shared:    ActionScope{Default: DecisionIntercept},
+	})
 	if err != nil {
 		_ = selfBypassMap.Close()
 		return nil, err
 	}
-	policy.local.EnableBypassCIDR = true
 	backend, err := PrepareCgroup(CgroupConfig{
 		Path:          path,
 		EnableTCP:     enableTCP,

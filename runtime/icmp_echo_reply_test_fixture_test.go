@@ -24,14 +24,17 @@ func newRealICMPEchoReplyBackendWithIPv6(t *testing.T) *commonEBPF.TCBackend {
 
 func newRealICMPEchoReplyBackendFor(t *testing.T, enableIPv6 bool) *commonEBPF.TCBackend {
 	t.Helper()
-	policyConfig := commonEBPF.PolicyConfig{
-		EnableTCP:          true,
-		ForceInterceptIPv4: netip.MustParsePrefix("198.18.0.0/15"),
+	policyConfig := commonEBPF.ActionPolicy{
+		EnableTCP: true,
+		Local:     commonEBPF.ActionScope{Default: commonEBPF.DecisionIntercept, DestinationCIDR: []commonEBPF.CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: commonEBPF.DecisionIntercept}}},
+		Shared:    commonEBPF.ActionScope{Default: commonEBPF.DecisionIntercept, DestinationCIDR: []commonEBPF.CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: commonEBPF.DecisionIntercept}}},
 	}
 	if enableIPv6 {
-		policyConfig.ForceInterceptIPv6 = netip.MustParsePrefix("fc00::/18")
+		prefix := commonEBPF.CIDRDecision{Prefix: netip.MustParsePrefix("fc00::/18"), Action: commonEBPF.DecisionIntercept}
+		policyConfig.Local.DestinationCIDR = append(policyConfig.Local.DestinationCIDR, prefix)
+		policyConfig.Shared.DestinationCIDR = append(policyConfig.Shared.DestinationCIDR, prefix)
 	}
-	policy, err := commonEBPF.CompilePolicy(policyConfig)
+	policy, err := commonEBPF.CompileActionPolicy(policyConfig)
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}
@@ -58,9 +61,10 @@ func newRealICMPEchoSharedPacketRewriteBackend(t *testing.T) *commonEBPF.SharedP
 
 func newRealICMPEchoSharedPacketRewriteBackendFor(t *testing.T, enableIPv6 bool) *commonEBPF.SharedPacketRewriteBackend {
 	t.Helper()
-	policyConfig := commonEBPF.PolicyConfig{
-		EnableTCP:          true,
-		ForceInterceptIPv4: netip.MustParsePrefix("198.18.0.0/15"),
+	policyConfig := commonEBPF.ActionPolicy{
+		EnableTCP: true,
+		Local:     commonEBPF.ActionScope{Default: commonEBPF.DecisionIntercept, DestinationCIDR: []commonEBPF.CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: commonEBPF.DecisionIntercept}}},
+		Shared:    commonEBPF.ActionScope{Default: commonEBPF.DecisionIntercept, DestinationCIDR: []commonEBPF.CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: commonEBPF.DecisionIntercept}}},
 	}
 	config := commonEBPF.SharedPacketRewriteConfig{
 		ListenerPort:  23458,
@@ -71,10 +75,12 @@ func newRealICMPEchoSharedPacketRewriteBackendFor(t *testing.T, enableIPv6 bool)
 		ICMPEchoReply: true,
 	}
 	if enableIPv6 {
-		policyConfig.ForceInterceptIPv6 = netip.MustParsePrefix("fc00::/18")
+		prefix := commonEBPF.CIDRDecision{Prefix: netip.MustParsePrefix("fc00::/18"), Action: commonEBPF.DecisionIntercept}
+		policyConfig.Local.DestinationCIDR = append(policyConfig.Local.DestinationCIDR, prefix)
+		policyConfig.Shared.DestinationCIDR = append(policyConfig.Shared.DestinationCIDR, prefix)
 		config.RedirectIPv6 = netip.MustParsePrefix("fd53:696e:672d:626f::/64")
 	}
-	policy, err := commonEBPF.CompilePolicy(policyConfig)
+	policy, err := commonEBPF.CompileActionPolicy(policyConfig)
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}

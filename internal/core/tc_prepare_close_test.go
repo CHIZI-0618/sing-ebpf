@@ -46,10 +46,10 @@ func openFDCount(t *testing.T) int {
 // Reaching that would need closeMaps itself to fail on top of this failure,
 // which is not reachable through TCConfig alone; this round did not add a
 // hook to force it. The aggregation is otherwise a direct, one-line use of
-// E.Errors, the same pattern UpdateCompiledBypassCIDR/UpdateHostAddresses
+// E.Errors, the same pattern as destination decision and host-address updates
 // already use elsewhere in this file.
 //
-// PrepareTC's compiled-policy validation (CompilePolicy, called before
+// PrepareTC's compiled-policy validation (CompileActionPolicy, called before
 // PrepareTC ever runs) now catches every policy-shaped misconfiguration this
 // test used to reach populateCompiledPolicyMaps with — port ranges past the
 // map's capacity, oversized CIDR or MAC lists, and so on all fail before a
@@ -82,7 +82,11 @@ func TestPrepareTCClosesRealMapsWhenAnExternalSelfMapDoesNotMatch(t *testing.T) 
 		t.Fatalf("close the map's raw file descriptor: %v", closeErr)
 	}
 
-	policy, err := CompilePolicy(PolicyConfig{EnableTCP: true})
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		Local:     ActionScope{Default: DecisionIntercept},
+		Shared:    ActionScope{Default: DecisionIntercept},
+	})
 	if err != nil {
 		t.Fatalf("compile a policy with nothing configured: %v", err)
 	}

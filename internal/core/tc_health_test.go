@@ -14,7 +14,7 @@ import (
 // update entry points rely on, and nothing more: how a failed policy rollback is
 // classified, and what invalidateLocked records.
 //
-// It does not exercise UpdateHostAddresses or UpdateCompiledBypassCIDR, and it
+// It does not exercise UpdateHostAddresses or destination decision updates, and it
 // does not show that the kernel data path was switched off — the backend here
 // has no real control map, so the disable is expected to fail. What it pins is
 // that the failure is surfaced rather than swallowed.

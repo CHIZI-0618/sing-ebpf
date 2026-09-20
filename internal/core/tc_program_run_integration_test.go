@@ -14,14 +14,15 @@ import (
 
 func TestTCProgramRunIntegration(t *testing.T) {
 	requireEBPFIntegration(t, "run unified TC eBPF programs in the kernel")
-	policy, err := CompilePolicy(PolicyConfig{
-		EnableTCP:           true,
-		SharedDNSMode:       DNSModeRespectPolicy,
-		SharedBypassPrivate: true,
-		ForceInterceptIPv4:  netip.MustParsePrefix("198.18.0.0/15"),
-		IncludeSourceMAC:    []MACAddress{{0x02, 0, 0, 0, 0, 1}},
-		IncludeSourceCIDR:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-		ExcludeSourceCIDR:   []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		Local:     ActionScope{Default: DecisionIntercept},
+		Shared: ActionScope{
+			Default:         DecisionIntercept,
+			DestinationCIDR: []CIDRDecision{{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Action: DecisionPass}, {Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: DecisionIntercept}},
+			SourceMAC:       []MACDecision{{Address: MACAddress{0x02, 0, 0, 0, 0, 1}, Action: DecisionIntercept}},
+			SourceCIDR:      []CIDRDecision{{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Action: DecisionIntercept}, {Prefix: netip.MustParsePrefix("203.0.113.0/24"), Action: DecisionPass}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,11 +94,7 @@ func TestTCProgramRunIntegration(t *testing.T) {
 		t.Fatalf("ForceIntercept did not override source and private bypass: action=%d", action)
 	}
 
-	bypassPolicy, err := CompileBypassCIDRPolicy([]netip.Prefix{netip.MustParsePrefix("1.1.1.0/24")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = backend.UpdateCompiledBypassCIDR(bypassPolicy); err != nil {
+	if _, err = backend.UpdateSharedDestinationDecisions([]CIDRDecision{{Prefix: netip.MustParsePrefix("1.1.1.0/24"), Action: DecisionPass}}); err != nil {
 		t.Fatal(err)
 	}
 	bypassedHTTPS := testIPv4TCPPacket(
@@ -119,27 +116,15 @@ func TestTCProgramRunIntegration(t *testing.T) {
 
 func TestForceInterceptPolicyPrecedenceIntegration(t *testing.T) {
 	requireEBPFIntegration(t, "verify ForceIntercept policy precedence in every TC data plane")
-	policy, err := CompilePolicy(PolicyConfig{
-		EnableTCP:           true,
-		Local:               LocalPolicy{DNSMode: DNSModeOff},
-		SharedDNSMode:       DNSModeOff,
-		SharedBypassPrivate: true,
-		ForceInterceptIPv4:  netip.MustParsePrefix("198.18.0.0/15"),
-		ForceInterceptIPv6:  netip.MustParsePrefix("fd00:198:18::/48"),
-		IncludeSourceMAC:    []MACAddress{{0x02, 0, 0, 0, 0, 3}},
-		LocalBypassPort:     []PortRange{{Start: 53, End: 53}},
-		SharedBypassPort:    []PortRange{{Start: 53, End: 53}},
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		Local:     ActionScope{Default: DecisionIntercept, DestinationPort: []PortDecision{{Protocol: ProtocolTCP, Port: 53, Action: DecisionPass}}, DestinationCIDR: []CIDRDecision{{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Action: DecisionPass}, {Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: DecisionIntercept}, {Prefix: netip.MustParsePrefix("fd00:198:18::/48"), Action: DecisionIntercept}}},
+		Shared:    ActionScope{Default: DecisionIntercept, DestinationPort: []PortDecision{{Protocol: ProtocolTCP, Port: 53, Action: DecisionPass}}, DestinationCIDR: []CIDRDecision{{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Action: DecisionPass}, {Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: DecisionIntercept}, {Prefix: netip.MustParsePrefix("fd00:198:18::/48"), Action: DecisionIntercept}}, SourceMAC: []MACDecision{{Address: MACAddress{0x02, 0, 0, 0, 0, 3}, Action: DecisionIntercept}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bypass, err := CompileBypassCIDRPolicy([]netip.Prefix{
-		netip.MustParsePrefix("198.18.0.0/15"),
-		netip.MustParsePrefix("fd00:198:18::/48"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	bypass := []CIDRDecision{{Prefix: netip.MustParsePrefix("198.18.0.0/15"), Action: DecisionPass}, {Prefix: netip.MustParsePrefix("fd00:198:18::/48"), Action: DecisionPass}}
 
 	t.Run("socket_assign", func(t *testing.T) {
 		backend, err := PrepareTC(TCConfig{
@@ -154,7 +139,7 @@ func TestForceInterceptPolicyPrecedenceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = backend.Close() })
-		if _, err = backend.UpdateCompiledBypassCIDR(bypass); err != nil {
+		if _, err = backend.UpdateSharedDestinationDecisions(bypass); err != nil {
 			t.Fatal(err)
 		}
 		if err = backend.Enable(); err != nil {
@@ -185,7 +170,7 @@ func TestForceInterceptPolicyPrecedenceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = backend.Close() })
-		if _, err = backend.UpdateCompiledBypassCIDR(bypass); err != nil {
+		if _, err = backend.UpdateDestinationDecisions(bypass); err != nil {
 			t.Fatal(err)
 		}
 		if err = backend.Enable(); err != nil {

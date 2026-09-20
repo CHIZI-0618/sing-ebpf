@@ -12,11 +12,15 @@ import (
 // what PrepareSharedPacketRewrite's icmp_echo_reply wiring needs.
 func newTestSharedNetworkForceInterceptPolicy(t *testing.T, forceInterceptIPv4 string) CompiledPolicy {
 	t.Helper()
-	config := PolicyConfig{EnableTCP: true}
-	if forceInterceptIPv4 != "" {
-		config.ForceInterceptIPv4 = netip.MustParsePrefix(forceInterceptIPv4)
+	config := ActionPolicy{
+		EnableTCP: true,
+		Local:     ActionScope{Default: DecisionIntercept},
+		Shared:    ActionScope{Default: DecisionIntercept},
 	}
-	policy, err := CompilePolicy(config)
+	if forceInterceptIPv4 != "" {
+		config.Shared.DestinationCIDR = []CIDRDecision{{Prefix: netip.MustParsePrefix(forceInterceptIPv4), Action: DecisionIntercept}}
+	}
+	policy, err := CompileActionPolicy(config)
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}

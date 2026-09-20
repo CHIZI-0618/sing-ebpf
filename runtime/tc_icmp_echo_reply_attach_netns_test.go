@@ -99,7 +99,15 @@ func TestAttachTCInterfaceAddsTheICMPEchoReplyFilterWhenEnabled(t *testing.T) {
 // icmp_echo_reply=reply, adds only the ordinary filter.
 func TestAttachTCInterfaceSkipsTheICMPEchoReplyFilterWhenDisabled(t *testing.T) {
 	enterTestNetworkNamespace(t)
-	policy, err := commonEBPF.CompilePolicy(commonEBPF.PolicyConfig{EnableTCP: true})
+	policy, err := commonEBPF.CompileActionPolicy(commonEBPF.ActionPolicy{
+		EnableTCP: true,
+		Local: commonEBPF.ActionScope{
+			Default: commonEBPF.DecisionIntercept,
+		},
+		Shared: commonEBPF.ActionScope{
+			Default: commonEBPF.DecisionIntercept,
+		},
+	})
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}

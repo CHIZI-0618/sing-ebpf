@@ -43,8 +43,8 @@ func TestCompileActionPolicyUsesFinalActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(policy.local.ExcludeUID) != 1 || policy.local.ExcludeUID[0].Start != 10000 {
-		t.Fatalf("UID pass action was not compiled into the local decision: %+v", policy.local.ExcludeUID)
+	if len(policy.uidEntries) == 0 || policy.uidDefaultBypass {
+		t.Fatalf("UID pass action was not compiled into the local decision: entries=%d defaultBypass=%v", len(policy.uidEntries), policy.uidDefaultBypass)
 	}
 	if len(policy.localInitialBypass.ipv4) != 1 || !policy.localInitialBypass.ipv4[0].Addr().Is4() {
 		t.Fatalf("destination pass action was not compiled into the local bypass map: %+v", policy.localInitialBypass)
@@ -78,8 +78,8 @@ func TestCompileActionPolicyDerivesDNSAction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if policy.local.DNSMode != testCase.wantLocal || policy.sharedDNSMode != testCase.wantShared {
-				t.Fatalf("DNS modes = %v/%v, want %v/%v", policy.local.DNSMode, policy.sharedDNSMode, testCase.wantLocal, testCase.wantShared)
+			if policy.localDNSMode != testCase.wantLocal || policy.sharedDNSMode != testCase.wantShared {
+				t.Fatalf("DNS modes = %v/%v, want %v/%v", policy.localDNSMode, policy.sharedDNSMode, testCase.wantLocal, testCase.wantShared)
 			}
 		})
 	}
@@ -90,7 +90,7 @@ func TestCompileActionPolicyDerivesDNSAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.local.DNSMode != DNSModeRespectPolicy || policy.sharedDNSMode != DNSModeRespectPolicy {
-		t.Fatalf("empty DNS action policy = %v/%v, want respect-policy", policy.local.DNSMode, policy.sharedDNSMode)
+	if policy.localDNSMode != DNSModeRespectPolicy || policy.sharedDNSMode != DNSModeRespectPolicy {
+		t.Fatalf("empty DNS action policy = %v/%v, want respect-policy", policy.localDNSMode, policy.sharedDNSMode)
 	}
 }
