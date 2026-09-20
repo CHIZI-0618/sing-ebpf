@@ -46,8 +46,34 @@ func TestSocketReleaseAttachPermissionFallsBack(t *testing.T) {
 		if socketReleaseUnavailable(errno) {
 			t.Fatalf("permission error %v was treated as general socket-release unavailability", errno)
 		}
+		if !socketReleaseProbeUnavailable(errno) {
+			t.Fatalf("permission error %v did not downgrade the optional probe", errno)
+		}
 	}
 	if socketReleaseAttachUnavailable(unix.EBADF) {
 		t.Fatal("unrelated socket-release attach error selected the LRU fallback")
+	}
+}
+
+func TestSocketReleaseProbeKeepsRequiredPermissionErrorsFatal(t *testing.T) {
+	if socketReleaseProbeUnavailable(unix.EBADF) {
+		t.Fatal("unrelated probe error was downgraded")
+	}
+	if socketReleaseUnavailable(unix.EPERM) {
+		t.Fatal("required attach classifier must not treat permission as generic absence")
+	}
+}
+
+func TestCgroupAttachModeReportsOnlyAttachedPrograms(t *testing.T) {
+	backend := &CgroupBackend{runtime: &cgroupRuntime{
+		attached:     [cgroupProgramCount]bool{true, true, false},
+		attach_modes: [cgroupProgramCount]string{"link_create", "legacy_exclusive"},
+	}}
+	if got := backend.AttachMode(); got != "mixed" {
+		t.Fatalf("attach mode = %q, want mixed", got)
+	}
+	modes := backend.AttachModes()
+	if modes[kernelProgramNameCgroupConnect4] != "link_create" || modes[kernelProgramNameCgroupSendmsg4] != "legacy_exclusive" {
+		t.Fatalf("unexpected attach modes: %#v", modes)
 	}
 }

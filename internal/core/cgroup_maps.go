@@ -218,7 +218,12 @@ func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 		},
 	})
 	if err != nil {
-		if socketReleaseUnavailable(err) {
+		// Socket-release is an optional cleanup optimization. Some Android
+		// kernels allow the cgroup data plane itself but reject loading this
+		// optional attach type with EPERM/EACCES (SELinux or a vendor policy).
+		// Treat only this optional probe as unavailable; required cgroup hooks
+		// still report their permission errors to the caller.
+		if socketReleaseProbeUnavailable(err) {
 			return false, nil
 		}
 		return false, err
@@ -239,6 +244,10 @@ func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 		return false, closeErr
 	}
 	return true, nil
+}
+
+func socketReleaseProbeUnavailable(err error) bool {
+	return socketReleaseUnavailable(err) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES)
 }
 
 func socketReleaseUnavailable(err error) bool {

@@ -24,6 +24,48 @@ func (b *CgroupBackend) CgroupPath() string {
 	return b.cgroupPath
 }
 
+// AttachModes returns the effective attach mechanism per loaded cgroup
+// program. It is a diagnostic snapshot only; it never probes or changes
+// attachments and therefore is safe to call from the request-driven API.
+func (b *CgroupBackend) AttachModes() map[string]string {
+	result := make(map[string]string)
+	if b == nil {
+		return result
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil {
+		return result
+	}
+	for slot, mode := range b.runtime.attach_modes {
+		if mode == "" || !b.runtime.attached[slot] {
+			continue
+		}
+		result[cgroupProgramDefinitions[slot].kernelProgramName] = mode
+	}
+	return result
+}
+
+// AttachMode summarizes the path actually used for the cgroup programs. A
+// mixed result is possible when a vendor kernel treats attach types
+// differently; callers should prefer AttachModes when they need per-hook
+// detail.
+func (b *CgroupBackend) AttachMode() string {
+	modes := b.AttachModes()
+	var selected string
+	for _, mode := range modes {
+		if selected == "" {
+			selected = mode
+		} else if selected != mode {
+			return "mixed"
+		}
+	}
+	if selected == "" {
+		return "disabled"
+	}
+	return selected
+}
+
 func (b *CgroupBackend) UDPCleanupMode() string {
 	if b == nil {
 		return cgroupUDPCleanupDisabled

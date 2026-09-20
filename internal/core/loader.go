@@ -32,6 +32,16 @@ var loadSharedNetwork = BPFGen.LoadSharedNetwork
 var loadICMPEchoReply = BPFGen.LoadICMPEchoReply
 
 func attachProgramRaw(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
+	_, err := attachProgramRawWithMode(target, program, attachType)
+	return err
+}
+
+// attachProgramRawWithMode reports the legacy attach variant that actually
+// succeeded. The distinction is operationally important on Android: a
+// vendor kernel can reject BPF_F_ALLOW_MULTI while still accepting the
+// single-program legacy operation. Callers must expose the effective path,
+// not merely the attempted fast path.
+func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) (string, error) {
 	options := link.RawAttachProgramOptions{
 		Target:  target,
 		Program: program,
@@ -39,15 +49,21 @@ func attachProgramRaw(target int, program *CiliumEBPF.Program, attachType Cilium
 		Flags:   unix.BPF_F_ALLOW_MULTI,
 	}
 	multiErr := rawAttachProgram(options)
-	if multiErr == nil || !cgroupMultiAttachUnavailable(multiErr) {
-		return multiErr
+	if multiErr == nil {
+		return "legacy_multi", nil
+	}
+	if !cgroupMultiAttachUnavailable(multiErr) {
+		return "", multiErr
 	}
 	// Keep the legacy fallback used before multi-only attachment was adopted.
 	// Some vendor kernels reject ALLOW_MULTI for otherwise usable hooks. An
 	// unflagged attach can replace an existing single-program attachment, so it
 	// is attempted only after errors known to indicate unavailable multi attach.
 	options.Flags = 0
-	return rawAttachProgram(options)
+	if err := rawAttachProgram(options); err != nil {
+		return "", err
+	}
+	return "legacy_exclusive", nil
 }
 
 func cgroupMultiAttachUnavailable(err error) bool {

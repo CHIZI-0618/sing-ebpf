@@ -58,6 +58,7 @@ type cgroupRuntime struct {
 	programs                    []*CiliumEBPF.Program
 	links                       [cgroupProgramCount]link.Link
 	attached                    [cgroupProgramCount]bool
+	attach_modes                [cgroupProgramCount]string
 	control_map_fd              int
 	tcp_redirect_map_fd         int
 	udp_redirect_map_fd         int

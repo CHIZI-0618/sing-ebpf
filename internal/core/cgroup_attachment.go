@@ -203,8 +203,13 @@ func (b *CgroupBackend) Attach() error {
 		})
 		if err == nil {
 			b.runtime.links[slot] = programLink
+			b.runtime.attach_modes[slot] = "link_create"
 		} else if cgroupLinkUnavailable(err) {
-			err = attachProgramRaw(cgroupFD, program, cgroupProgramDefinitions[slot].attachType)
+			var mode string
+			mode, err = attachProgramRawWithMode(cgroupFD, program, cgroupProgramDefinitions[slot].attachType)
+			if err == nil {
+				b.runtime.attach_modes[slot] = mode
+			}
 		}
 		if err != nil {
 			_ = b.detachProgramsLocked()
@@ -244,6 +249,7 @@ func (b *CgroupBackend) detachProgramsLocked() error {
 			err = programLink.Close()
 			b.runtime.links[slot] = nil
 			b.runtime.attached[slot] = false
+			b.runtime.attach_modes[slot] = ""
 			if err != nil {
 				detachErr = E.Errors(detachErr, err)
 			}
@@ -253,6 +259,7 @@ func (b *CgroupBackend) detachProgramsLocked() error {
 		}
 		if err == nil || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ESRCH) {
 			b.runtime.attached[slot] = false
+			b.runtime.attach_modes[slot] = ""
 			continue
 		}
 		detachErr = E.Errors(detachErr, err)
