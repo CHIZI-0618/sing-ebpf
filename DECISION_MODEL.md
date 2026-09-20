@@ -30,11 +30,19 @@ destination `pass` decisions before they cross this boundary. The library
 keeps transactional map replacement, default action handling, self-bypass,
 flow cleanup, and capability-selected fallback behavior.
 
-The older selector-based API remains as a compatibility surface for existing
-standalone users and low-level integration tests. New sing-box code must not
-use it for configuration semantics; it is deliberately not extended with
-DNS, FakeIP, rule-set, package, or other sing-box concepts. It can be removed
-in a future breaking release after downstream consumers have migrated.
+The selector-based API has been removed. The root package intentionally exposes
+only final-action policy construction and action-level runtime updates. This
+prevents downstream callers from accidentally treating the library as a
+second sing-box configuration compiler. Static action policy is constructed
+when a backend is prepared; a configuration reload should replace that
+backend/inbound rather than mutate selector state in place.
+
+The mutable destination-action entry points are deliberately narrower: they
+are for sing-box's dynamic rule-set pass updates only. They replace the
+destination pass map transactionally and do not reinterpret DNS, FakeIP,
+private-address, UID, package, MAC, or port configuration. Process tracking
+also receives only final UID actions and is enabled by sing-box according to
+its `router.NeedFindProcess()` decision.
 
 ## Ownership matrix
 
