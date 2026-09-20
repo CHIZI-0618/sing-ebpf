@@ -112,6 +112,12 @@ func validateActionScope(scope ActionScope, name string) error {
 	if !scope.Default.Valid() {
 		return E.New("invalid ", name, " eBPF default decision: ", scope.Default)
 	}
+	if name == "local" && (len(scope.SourceCIDR) > 0 || len(scope.SourceMAC) > 0) {
+		return E.New("local eBPF action scope does not support source CIDR or MAC decisions")
+	}
+	if name == "shared" && len(scope.UID) > 0 {
+		return E.New("shared eBPF action scope does not support UID decisions")
+	}
 	for _, rule := range scope.UID {
 		if rule.Start > rule.End || !rule.Action.Valid() {
 			return E.New("invalid ", name, " UID decision")
