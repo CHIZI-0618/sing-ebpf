@@ -125,9 +125,12 @@ BTF evidence are kept separate from ordinary capability selection.
 
 Current important fallbacks include TCX → owned `clsact`, SOCKMAP-capable TCP →
 legacy TCP lookup, cgroup socket-release notification → bounded LRU cleanup,
-and cgroup multi-program → compatible legacy exclusive attachment. Do not turn
+socket-release probe permission denial → the same bounded LRU cleanup, and
+cgroup multi-program → compatible legacy exclusive attachment. Do not turn
 an optional fallback failure into a silent feature claim; diagnostics must name
-the effective path.
+the effective path. In particular, the runtime cgroup diagnostics distinguish
+`link_create`, `legacy_multi`, `legacy_exclusive`, and `mixed` attachment paths,
+as well as the effective UDP cleanup, socket-storage, and time-source modes.
 
 ## Lifecycle and concurrency review
 
