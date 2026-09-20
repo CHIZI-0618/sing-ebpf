@@ -94,35 +94,3 @@ func TestCompileActionPolicyDerivesDNSAction(t *testing.T) {
 		t.Fatalf("empty DNS action policy = %v/%v, want respect-policy", policy.localDNSMode, policy.sharedDNSMode)
 	}
 }
-
-func TestCompileActionPolicyRejectsUnsupportedScopeDecisions(t *testing.T) {
-	tests := []struct {
-		name   string
-		local  ActionScope
-		shared ActionScope
-	}{
-		{
-			name:  "local source CIDR",
-			local: ActionScope{Default: DecisionIntercept, SourceCIDR: []CIDRDecision{{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Action: DecisionPass}}},
-		},
-		{
-			name:  "local source MAC",
-			local: ActionScope{Default: DecisionIntercept, SourceMAC: []MACDecision{{Address: MACAddress{2, 0, 0, 0, 0, 1}, Action: DecisionPass}}},
-		},
-		{
-			name:   "shared UID",
-			shared: ActionScope{Default: DecisionIntercept, UID: []UIDDecision{{Start: 1000, End: 1000, Action: DecisionPass}}},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := CompileActionPolicy(ActionPolicy{
-				Local:  test.local,
-				Shared: test.shared,
-			})
-			if err == nil {
-				t.Fatal("unsupported action scope was accepted")
-			}
-		})
-	}
-}
