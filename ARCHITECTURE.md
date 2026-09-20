@@ -102,6 +102,13 @@ application may alias them behind adapter-side bridge files so its startup,
 monitoring, diagnostics, retry scheduling, and shutdown remain independent of
 implementation details.
 
+`runtime.TCRuntime.TCDiagnostics` is the boundary for effective TC runtime
+state: attachment mechanism, listener lookup mode, delivery/routing values,
+resource counts, priority, and rebuild status. It is a value-only snapshot
+and never exposes kernel handles or performs periodic map scans. The consumer
+may add monitor-owned health timestamps and network generations, but must not
+turn the library snapshot into a packet counter or a second lifecycle owner.
+
 Keep the following in the consumer:
 
 - JSON options, defaulting, and validation;

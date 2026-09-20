@@ -154,6 +154,21 @@ Shared runtime notifications are delivered after releasing the runtime lock.
 `PrepareBackend` is different: it is a synchronous factory inside the
 reconciliation transaction and must not call back into the runtime.
 
+## TC runtime diagnostics
+
+`runtime.TCRuntime.TCDiagnostics` is a request-driven, value-only snapshot of
+the effective TC socket-assignment runtime. It reports the actual TCX/clsact
+attachment mode (including `mixed`), SOCKMAP versus direct listener lookup,
+delivery interface and policy-routing values, active and retired resource
+counts, priority, and whether the backend requires a rebuild. It does not
+expose maps, programs, links, file descriptors, or netlink objects.
+
+The snapshot does not scan maps, inspect every packet, or start a timer. Health
+and reconciliation timestamps, network-generation state, and user-facing
+status belong to the sing-box consumer, which owns the monitor and retry
+scheduler. Keep packet pass/intercept counters out of the default path unless
+they are already maintained by a cheap native per-CPU counter.
+
 ## Test layers
 
 Keep each test tied to a current contract. Delete a test and its fixtures when
