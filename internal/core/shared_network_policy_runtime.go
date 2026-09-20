@@ -89,14 +89,14 @@ func populateSharedNetworkMACPolicy(mapInstance *CiliumEBPF.Map, addresses []MAC
 	return err
 }
 
-func (b *SharedPacketRewriteBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+func (b *SharedPacketRewriteBackend) updateDestinationCIDRPolicy(policy dualStackCIDRPrefixes) (bool, error) {
 	ipv4 := policy.ipv4
 	ipv6 := policy.ipv6
 	err := checkLPMTriePolicyCompatibility("shared-network bypass CIDR", len(ipv4)+len(ipv6))
 	if err != nil {
 		return false, err
 	}
-	if len(ipv4) > maxBypassCIDRPolicyEntries || len(ipv6) > maxBypassCIDRPolicyEntries {
+	if len(ipv4) > maxDestinationCIDRPolicyEntries || len(ipv6) > maxDestinationCIDRPolicyEntries {
 		return false, E.New("shared-network bypass CIDR policy exceeds eBPF map capacity")
 	}
 	if b == nil {
@@ -166,7 +166,7 @@ func (b *SharedPacketRewriteBackend) UpdateDestinationDecisions(decisions []CIDR
 	if err != nil {
 		return false, err
 	}
-	return b.UpdateCompiledBypassCIDR(policy)
+	return b.updateDestinationCIDRPolicy(policy)
 }
 
 func (b *SharedPacketRewriteBackend) BypassCIDRCount() (int, int) {
@@ -229,35 +229,6 @@ func (b *SharedPacketRewriteBackend) UpdateHostAddresses(addresses []netip.Addr)
 				E.Errors(err, E.Cause(rollbackErr, "rollback host address maps")),
 			)
 		}
-		return err
-	}
-	return nil
-}
-
-// SetBypassCIDRState updates only policy presence flags when the maps are
-// owned by a cgroup backend and shared-network reuses those descriptors.
-func (b *SharedPacketRewriteBackend) SetBypassCIDRState(ipv4Count, ipv6Count int) error {
-	if b == nil {
-		return errBackendClosed
-	}
-	if ipv4Count < 0 || ipv4Count > maxBypassCIDRPolicyEntries ||
-		ipv6Count < 0 || ipv6Count > maxBypassCIDRPolicyEntries {
-		return E.New("invalid shared-network bypass CIDR state")
-	}
-	b.access.Lock()
-	defer b.access.Unlock()
-	if err := b.requireUsableLocked(); err != nil {
-		return err
-	}
-	oldIPv4Count := b.bypassIPv4Count
-	oldIPv6Count := b.bypassIPv6Count
-	oldFlags := b.control.Flags
-	b.bypassIPv4Count = ipv4Count
-	b.bypassIPv6Count = ipv6Count
-	if err := b.updatePolicyFlagsLocked(); err != nil {
-		b.bypassIPv4Count = oldIPv4Count
-		b.bypassIPv6Count = oldIPv6Count
-		b.control.Flags = oldFlags
 		return err
 	}
 	return nil

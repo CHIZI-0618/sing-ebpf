@@ -221,8 +221,8 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		enable_udp:               config.EnableUDP,
 		uid_policy:               len(uidPolicyEntries) > 0 || uidDefaultBypass,
 		uid_default_bypass:       uidDefaultBypass,
-		bypass_ipv4_policy:       (policy.local.EnableBypassCIDR && redirectIPv4.IsValid()) || len(policy.localInitialBypass.ipv4) > 0,
-		bypass_ipv6_policy:       (policy.local.EnableBypassCIDR && redirectIPv6.IsValid()) || len(policy.localInitialBypass.ipv6) > 0,
+		bypass_ipv4_policy:       len(policy.localInitialBypass.ipv4) > 0,
+		bypass_ipv6_policy:       len(policy.localInitialBypass.ipv6) > 0,
 		bypass_port_policy:       len(policy.localBypassPortEntries) > 0,
 		socket_release_supported: socketReleaseSupported,
 		coarse_time_supported:    coarseTimeSupported,
@@ -255,8 +255,8 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		forceInterceptIPv6:   forceInterceptIPv6,
 		enableIPv6:           config.EnableIPv6,
 		enableUDP:            config.EnableUDP,
-		dnsMode:              policy.local.DNSMode,
-		bypassPrivateAddress: policy.local.BypassPrivateAddress,
+		dnsMode:              policy.localDNSMode,
+		bypassPrivateAddress: false,
 		udpTimeoutSeconds:    udpTimeoutSeconds,
 	}
 	if err = populateCompiledPolicyMaps(policyMapTargets{

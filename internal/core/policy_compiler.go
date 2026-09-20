@@ -4,35 +4,18 @@ package core
 
 import (
 	"net/netip"
-	"slices"
 
 	E "github.com/sagernet/sing/common/exceptions"
 )
-
-type PolicyConfig struct {
-	EnableTCP           bool
-	EnableUDP           bool
-	Local               LocalPolicy
-	SharedDNSMode       DNSMode
-	SharedBypassPrivate bool
-	ForceInterceptIPv4  netip.Prefix
-	ForceInterceptIPv6  netip.Prefix
-	IncludeSourceCIDR   []netip.Prefix
-	ExcludeSourceCIDR   []netip.Prefix
-	IncludeSourceMAC    []MACAddress
-	ExcludeSourceMAC    []MACAddress
-	LocalBypassPort     []PortRange
-	SharedBypassPort    []PortRange
-}
 
 // CompiledPolicy is an immutable policy snapshot shared by all eBPF data
 // planes created for one consumer. ForceInterceptIPv4 and ForceInterceptIPv6
 // are opaque application-supplied destination prefixes: the library neither
 // assigns their meaning nor resolves addresses within them.
 type CompiledPolicy struct {
-	local                   LocalPolicy
 	uidEntries              []uidLPMKey
 	uidDefaultBypass        bool
+	localDNSMode            DNSMode
 	sharedDNSMode           DNSMode
 	sharedBypassPrivate     bool
 	forceInterceptIPv4      netip.Prefix
@@ -81,11 +64,10 @@ func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
 	if !forceIPv6.IsValid() {
 		forceIPv6 = sharedForceIPv6
 	}
-	local.local.DNSMode = actionDNSMode(config.Local)
 	return CompiledPolicy{
-		local:                   local.local,
 		uidEntries:              local.uidEntries,
 		uidDefaultBypass:        local.uidDefaultBypass,
+		localDNSMode:            actionDNSMode(config.Local),
 		includeSource:           shared.includeSource,
 		excludeSource:           shared.excludeSource,
 		includeSourceMAC:        shared.includeSourceMAC,
@@ -102,7 +84,6 @@ func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
 }
 
 type compiledActionScope struct {
-	local                   LocalPolicy
 	uidEntries              []uidLPMKey
 	uidDefaultBypass        bool
 	includeSource           dualStackCIDRPrefixes
@@ -161,17 +142,12 @@ func validateActionScope(scope ActionScope, name string) error {
 
 func compileActionScope(scope ActionScope, name string) (compiledActionScope, dualStackCIDRPrefixes, netip.Prefix, netip.Prefix, error) {
 	result := compiledActionScope{}
+	var err error
 	var bypass dualStackCIDRPrefixes
 	var forceIPv4, forceIPv6 netip.Prefix
-	for _, rule := range scope.UID {
-		if rule.Action == DecisionPass {
-			result.local.ExcludeUID = append(result.local.ExcludeUID, UIDRange{Start: rule.Start, End: rule.End})
-		} else {
-			result.local.IncludeUID = append(result.local.IncludeUID, UIDRange{Start: rule.Start, End: rule.End})
-		}
-	}
-	if scope.Default == DecisionPass && len(scope.UID) > 0 {
-		result.local.IncludeUIDConfigured = true
+	result.uidEntries, result.uidDefaultBypass, err = compileUIDActionPolicy(scope.UID, scope.Default)
+	if err != nil {
+		return compiledActionScope{}, dualStackCIDRPrefixes{}, netip.Prefix{}, netip.Prefix{}, E.Cause(err, name, " UID policy")
 	}
 	var sourceInclude, sourceExclude []netip.Prefix
 	for _, rule := range scope.SourceCIDR {
@@ -181,8 +157,14 @@ func compileActionScope(scope ActionScope, name string) (compiledActionScope, du
 			sourceInclude = append(sourceInclude, rule.Prefix)
 		}
 	}
-	result.includeSource.ipv4, result.includeSource.ipv6, _ = compileBypassCIDRPolicy(sourceInclude)
-	result.excludeSource.ipv4, result.excludeSource.ipv6, _ = compileBypassCIDRPolicy(sourceExclude)
+	result.includeSource.ipv4, result.includeSource.ipv6, err = compileCIDRPrefixes(sourceInclude)
+	if err != nil {
+		return compiledActionScope{}, dualStackCIDRPrefixes{}, netip.Prefix{}, netip.Prefix{}, E.Cause(err, name, " include source CIDR policy")
+	}
+	result.excludeSource.ipv4, result.excludeSource.ipv6, err = compileCIDRPrefixes(sourceExclude)
+	if err != nil {
+		return compiledActionScope{}, dualStackCIDRPrefixes{}, netip.Prefix{}, netip.Prefix{}, E.Cause(err, name, " exclude source CIDR policy")
+	}
 	for _, rule := range scope.SourceMAC {
 		if rule.Action == DecisionPass {
 			result.excludeSourceMAC = append(result.excludeSourceMAC, rule.Address)
@@ -226,84 +208,5 @@ func compileActionScope(scope ActionScope, name string) (compiledActionScope, du
 			result.localBypassPortEntries = append(result.localBypassPortEntries, entry)
 		}
 	}
-	result.uidEntries, result.uidDefaultBypass, _ = compileUIDPolicy(result.local)
 	return result, bypass, forceIPv4, forceIPv6, nil
-}
-
-func CompilePolicy(config PolicyConfig) (CompiledPolicy, error) {
-	uidEntries, uidDefaultBypass, err := compileUIDPolicy(config.Local)
-	if err != nil {
-		return CompiledPolicy{}, err
-	}
-	forceInterceptIPv4, err := normalizeAddressPrefix("IPv4 force-intercept range", config.ForceInterceptIPv4, true)
-	if err != nil {
-		return CompiledPolicy{}, err
-	}
-	forceInterceptIPv6, err := normalizeAddressPrefix("IPv6 force-intercept range", config.ForceInterceptIPv6, false)
-	if err != nil {
-		return CompiledPolicy{}, err
-	}
-	includeIPv4, includeIPv6, err := compileBypassCIDRPolicy(config.IncludeSourceCIDR)
-	if err != nil {
-		return CompiledPolicy{}, E.Cause(err, "compile eBPF include source CIDR policy")
-	}
-	excludeIPv4, excludeIPv6, err := compileBypassCIDRPolicy(config.ExcludeSourceCIDR)
-	if err != nil {
-		return CompiledPolicy{}, E.Cause(err, "compile eBPF exclude source CIDR policy")
-	}
-	if len(includeIPv4) > maxSharedSourceCIDRPolicyEntries || len(includeIPv6) > maxSharedSourceCIDRPolicyEntries ||
-		len(excludeIPv4) > maxSharedSourceCIDRPolicyEntries || len(excludeIPv6) > maxSharedSourceCIDRPolicyEntries {
-		return CompiledPolicy{}, E.New("eBPF source CIDR policy exceeds map capacity")
-	}
-	if len(config.IncludeSourceMAC) > maxSharedSourceMACPolicyEntries ||
-		len(config.ExcludeSourceMAC) > maxSharedSourceMACPolicyEntries {
-		return CompiledPolicy{}, E.New("eBPF source MAC policy exceeds map capacity")
-	}
-	localBypassPortEntries, err := compilePortPolicy(config.LocalBypassPort, config.EnableTCP, config.EnableUDP)
-	if err != nil {
-		return CompiledPolicy{}, E.Cause(err, "compile local eBPF port bypass policy")
-	}
-	sharedBypassPortEntries, err := compilePortPolicy(config.SharedBypassPort, config.EnableTCP, config.EnableUDP)
-	if err != nil {
-		return CompiledPolicy{}, E.Cause(err, "compile shared eBPF port bypass policy")
-	}
-	local := config.Local
-	local.IncludeUID = slices.Clone(local.IncludeUID)
-	local.ExcludeUID = slices.Clone(local.ExcludeUID)
-	return CompiledPolicy{
-		local:                   local,
-		uidEntries:              uidEntries,
-		uidDefaultBypass:        uidDefaultBypass,
-		sharedDNSMode:           config.SharedDNSMode,
-		sharedBypassPrivate:     config.SharedBypassPrivate,
-		forceInterceptIPv4:      forceInterceptIPv4,
-		forceInterceptIPv6:      forceInterceptIPv6,
-		includeSource:           dualStackCIDRPrefixes{ipv4: includeIPv4, ipv6: includeIPv6},
-		excludeSource:           dualStackCIDRPrefixes{ipv4: excludeIPv4, ipv6: excludeIPv6},
-		includeSourceMAC:        slices.Clone(config.IncludeSourceMAC),
-		excludeSourceMAC:        slices.Clone(config.ExcludeSourceMAC),
-		localBypassPortEntries:  localBypassPortEntries,
-		sharedBypassPortEntries: sharedBypassPortEntries,
-	}, nil
-}
-
-func compilePortPolicy(ranges []PortRange, enableTCP, enableUDP bool) ([]tcPortKey, error) {
-	var entries []tcPortKey
-	for _, portRange := range ranges {
-		if portRange.Start == 0 || portRange.Start > portRange.End {
-			return nil, E.New("invalid eBPF port bypass range")
-		}
-		for port := uint32(portRange.Start); port <= uint32(portRange.End); port++ {
-			if enableTCP {
-				entries = append(entries, tcPortKey{Protocol: ProtocolTCP, Port: uint16(port)})
-			}
-			if enableUDP {
-				entries = append(entries, tcPortKey{Protocol: ProtocolUDP, Port: uint16(port)})
-			}
-			if len(entries) > tcPortPolicyCapacity {
-				return nil, E.New("eBPF port bypass policy exceeds map capacity")
-			}
-		}
-	}
-	return entries, nil
 }

@@ -334,7 +334,7 @@ func sharedSourceMACMapCapacity(entries int) uint32 {
 
 func createSharedBypassMap(runtimeState *sharedPacketRewriteRuntime, objectName string, kernelName string) error {
 	maps, err := loadObjectMaps(loadSharedNetwork, map[string]mapSpecOverride{
-		objectName: {name: kernelName, mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		objectName: {name: kernelName, mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 	})
 	if err != nil {
 		return err

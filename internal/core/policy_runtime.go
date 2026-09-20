@@ -175,7 +175,7 @@ func replaceDualStackCIDRPolicy(
 }
 
 func replaceCIDRPolicyMap(mapInstance *CiliumEBPF.Map, current, next []netip.Prefix) error {
-	additions, removals := bypassCIDRPolicyDelta(current, next)
+	additions, removals := destinationCIDRPolicyDelta(current, next)
 	if len(additions) == 0 && len(removals) == 0 {
 		return nil
 	}

@@ -27,15 +27,6 @@ type UIDRange struct {
 	End   uint32
 }
 
-type LocalPolicy struct {
-	EnableBypassCIDR     bool
-	DNSMode              DNSMode
-	BypassPrivateAddress bool
-	IncludeUIDConfigured bool
-	IncludeUID           []UIDRange
-	ExcludeUID           []UIDRange
-}
-
 type MACAddress [6]byte
 
 type tcMACKey struct {

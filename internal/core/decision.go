@@ -70,16 +70,17 @@ type ActionPolicy struct {
 	Shared    ActionScope
 }
 
-func compileDestinationPassDecisions(decisions []CIDRDecision) (BypassCIDRPolicy, error) {
+func compileDestinationPassDecisions(decisions []CIDRDecision) (dualStackCIDRPrefixes, error) {
 	prefixes := make([]netip.Prefix, 0, len(decisions))
 	for _, decision := range decisions {
 		if !decision.Prefix.IsValid() || !decision.Action.Valid() {
-			return BypassCIDRPolicy{}, E.New("invalid eBPF destination decision")
+			return dualStackCIDRPrefixes{}, E.New("invalid eBPF destination decision")
 		}
 		if decision.Action != DecisionPass {
-			return BypassCIDRPolicy{}, E.New("destination decision updates require pass actions")
+			return dualStackCIDRPrefixes{}, E.New("destination decision updates require pass actions")
 		}
 		prefixes = append(prefixes, decision.Prefix)
 	}
-	return CompileBypassCIDRPolicy(prefixes)
+	ipv4, ipv6, err := compileCIDRPrefixes(prefixes)
+	return dualStackCIDRPrefixes{ipv4: ipv4, ipv6: ipv6}, err
 }

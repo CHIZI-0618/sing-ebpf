@@ -21,14 +21,8 @@ type (
 	PortDecision                   = core.PortDecision
 	UIDDecision                    = core.UIDDecision
 	MACDecision                    = core.MACDecision
-	DNSMode                        = core.DNSMode
-	UIDRange                       = core.UIDRange
-	LocalPolicy                    = core.LocalPolicy
 	MACAddress                     = core.MACAddress
-	PortRange                      = core.PortRange
-	PolicyConfig                   = core.PolicyConfig
 	CompiledPolicy                 = core.CompiledPolicy
-	BypassCIDRPolicy               = core.BypassCIDRPolicy
 	CgroupMapCapacity              = core.CgroupMapCapacity
 	MapUsage                       = core.MapUsage
 	SharedPacketRewriteMapCapacity = core.SharedPacketRewriteMapCapacity
@@ -70,10 +64,6 @@ const (
 	SocketMetadataSelfBypass      = core.SocketMetadataSelfBypass
 	SocketMetadataPolicyBypass    = core.SocketMetadataPolicyBypass
 	SocketMetadataPolicyIntercept = core.SocketMetadataPolicyIntercept
-
-	DNSModeHijack        = core.DNSModeHijack
-	DNSModeRespectPolicy = core.DNSModeRespectPolicy
-	DNSModeOff           = core.DNSModeOff
 
 	TCPRedirectMapCapacity                   = core.TCPRedirectMapCapacity
 	UDPRedirectMapCapacity                   = core.UDPRedirectMapCapacity
@@ -300,13 +290,6 @@ func (b *TCBackend) Disable() error {
 func (b *TCBackend) UpdateHostAddresses(addresses []netip.Addr) error {
 	return core.UnwrapTCBackend(b).UpdateHostAddresses(addresses)
 }
-func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	backend := core.UnwrapTCBackend(b)
-	if backend == nil {
-		return false, errors.New("uninitialized TC eBPF backend")
-	}
-	return backend.UpdateCompiledBypassCIDR(policy)
-}
 
 // UpdateLocalDestinationDecisions applies final destination actions to the
 // local TC path. The backend accepts only pass entries for this mutable map;
@@ -327,20 +310,6 @@ func (b *TCBackend) UpdateSharedDestinationDecisions(decisions []CIDRDecision) (
 		return false, errors.New("uninitialized TC eBPF backend")
 	}
 	return backend.UpdateSharedDestinationDecisions(decisions)
-}
-func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	backend := core.UnwrapTCBackend(b)
-	if backend == nil {
-		return false, errors.New("uninitialized TC eBPF backend")
-	}
-	return backend.UpdateLocalCompiledBypassCIDR(policy)
-}
-func (b *TCBackend) UpdateSharedCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	backend := core.UnwrapTCBackend(b)
-	if backend == nil {
-		return false, errors.New("uninitialized TC eBPF backend")
-	}
-	return backend.UpdateSharedCompiledBypassCIDR(policy)
 }
 func (b *TCBackend) TCPListenerLookupMode() string {
 	return core.UnwrapTCBackend(b).TCPListenerLookupMode()
@@ -439,9 +408,6 @@ func (b *SharedPacketRewriteBackend) RequestMaintenance() {
 func (b *SharedPacketRewriteBackend) UpdateHostAddresses(addresses []netip.Addr) error {
 	return core.UnwrapSharedPacketRewriteBackend(b).UpdateHostAddresses(addresses)
 }
-func (b *SharedPacketRewriteBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	return core.UnwrapSharedPacketRewriteBackend(b).UpdateCompiledBypassCIDR(policy)
-}
 
 // UpdateDestinationDecisions applies final destination actions to the shared
 // packet-rewrite path.
@@ -451,9 +417,6 @@ func (b *SharedPacketRewriteBackend) UpdateDestinationDecisions(decisions []CIDR
 		return false, errors.New("uninitialized shared packet-rewrite eBPF backend")
 	}
 	return backend.UpdateDestinationDecisions(decisions)
-}
-func (b *SharedPacketRewriteBackend) SetBypassCIDRState(ipv4Count, ipv6Count int) error {
-	return core.UnwrapSharedPacketRewriteBackend(b).SetBypassCIDRState(ipv4Count, ipv6Count)
 }
 func (b *SharedPacketRewriteBackend) BypassCIDRCount() (int, int) {
 	return core.UnwrapSharedPacketRewriteBackend(b).BypassCIDRCount()
@@ -505,18 +468,10 @@ func (b *SharedPacketRewriteBackend) Close() error {
 	return backend.Close()
 }
 
-func CompilePolicy(config PolicyConfig) (CompiledPolicy, error) {
-	return core.CompilePolicy(config)
-}
-
 // CompileActionPolicy accepts only final pass/intercept rules. Configuration
 // semantics such as DNS, FakeIP and rule-sets must be compiled by the caller.
 func CompileActionPolicy(config ActionPolicy) (CompiledPolicy, error) {
 	return core.CompileActionPolicy(config)
-}
-
-func CompileBypassCIDRPolicy(prefixes []netip.Prefix) (BypassCIDRPolicy, error) {
-	return core.CompileBypassCIDRPolicy(prefixes)
 }
 
 func DefaultCgroupMapCapacity() CgroupMapCapacity {

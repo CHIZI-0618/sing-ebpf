@@ -219,10 +219,10 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.LRUHash, maxEntries: config.AssignmentCapacity},
 		"tc_stats":               {name: "sb_tc_stats", mapType: CiliumEBPF.PerCPUArray, maxEntries: tcStatCount},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
-		"tc_local_bypass_ipv4":   {name: "sb_tc_lbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
-		"tc_local_bypass_ipv6":   {name: "sb_tc_lbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
-		"tc_shared_bypass_ipv4":  {name: "sb_tc_sbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
-		"tc_shared_bypass_ipv6":  {name: "sb_tc_sbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxBypassCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_local_bypass_ipv4":   {name: "sb_tc_lbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_local_bypass_ipv6":   {name: "sb_tc_lbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_shared_bypass_ipv4":  {name: "sb_tc_sbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
+		"tc_shared_bypass_ipv6":  {name: "sb_tc_sbypass6", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
 		"tc_include_source_ipv4": {name: "sb_tc_insrc4", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(includeIPv4)), 1), flags: bpfFlagNoPrealloc},
 		"tc_include_source_ipv6": {name: "sb_tc_insrc6", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(includeIPv6)), 1), flags: bpfFlagNoPrealloc},
 		"tc_exclude_source_ipv4": {name: "sb_tc_exsrc4", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(excludeIPv4)), 1), flags: bpfFlagNoPrealloc},
@@ -259,7 +259,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		DeliveryInterface: config.DeliveryInterface,
 		RoutingMark:       config.RoutingMark,
 		ListenerPort:      config.ListenerPort,
-		LocalDNSMode:      policy.local.DNSMode,
+		LocalDNSMode:      policy.localDNSMode,
 		SharedDNSMode:     policy.sharedDNSMode,
 	}
 	if len(includeIPv4)+len(includeIPv6) > 0 {
@@ -449,7 +449,7 @@ func tcFlags(config TCConfig, policy CompiledPolicy) uint32 {
 		EnableSharedIPv6:    config.EnableSharedIPv6,
 		UIDPolicy:           len(policy.uidEntries) > 0 || policy.uidDefaultBypass,
 		UIDDefaultBypass:    policy.uidDefaultBypass,
-		LocalBypassPrivate:  policy.local.BypassPrivateAddress,
+		LocalBypassPrivate:  false,
 		SharedBypassPrivate: policy.sharedBypassPrivate,
 		LocalBypassPort:     len(policy.localBypassPortEntries) > 0,
 		SharedBypassPort:    len(policy.sharedBypassPortEntries) > 0,
@@ -661,10 +661,6 @@ func (b *TCBackend) Stats() (TCStats, error) {
 	return stats, nil
 }
 
-func (b *TCBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	return b.updateCompiledBypassCIDR(policy, false)
-}
-
 // UpdateLocalDestinationDecisions applies final local pass decisions. The
 // backend does not interpret the reason for a pass action.
 func (b *TCBackend) UpdateLocalDestinationDecisions(decisions []CIDRDecision) (bool, error) {
@@ -672,7 +668,7 @@ func (b *TCBackend) UpdateLocalDestinationDecisions(decisions []CIDRDecision) (b
 	if err != nil {
 		return false, err
 	}
-	return b.UpdateLocalCompiledBypassCIDR(policy)
+	return b.updateDestinationCIDRPolicy(policy, false)
 }
 
 // UpdateSharedDestinationDecisions applies final shared pass decisions. The
@@ -682,23 +678,11 @@ func (b *TCBackend) UpdateSharedDestinationDecisions(decisions []CIDRDecision) (
 	if err != nil {
 		return false, err
 	}
-	return b.UpdateSharedCompiledBypassCIDR(policy)
+	return b.updateDestinationCIDRPolicy(policy, true)
 }
 
-// UpdateLocalCompiledBypassCIDR updates only the destination CIDR bypass
-// policy used by the local TC path. Shared TC has its own independent maps.
-func (b *TCBackend) UpdateLocalCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	return b.updateCompiledBypassCIDR(policy, false)
-}
-
-// UpdateSharedCompiledBypassCIDR updates only the destination CIDR bypass
-// policy used by the shared TC path. Local TC has its own independent maps.
-func (b *TCBackend) UpdateSharedCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
-	return b.updateCompiledBypassCIDR(policy, true)
-}
-
-func (b *TCBackend) updateCompiledBypassCIDR(policy BypassCIDRPolicy, shared bool) (bool, error) {
-	if len(policy.ipv4) > maxBypassCIDRPolicyEntries || len(policy.ipv6) > maxBypassCIDRPolicyEntries {
+func (b *TCBackend) updateDestinationCIDRPolicy(policy dualStackCIDRPrefixes, shared bool) (bool, error) {
+	if len(policy.ipv4) > maxDestinationCIDRPolicyEntries || len(policy.ipv6) > maxDestinationCIDRPolicyEntries {
 		return false, E.New("TC eBPF bypass CIDR policy exceeds map capacity")
 	}
 	if err := checkLPMTriePolicyCompatibility("TC eBPF bypass CIDR", len(policy.ipv4)+len(policy.ipv6)); err != nil {
@@ -721,7 +705,7 @@ func (b *TCBackend) updateCompiledBypassCIDR(policy BypassCIDRPolicy, shared boo
 		b.runtime.maps[ipv4MapName],
 		b.runtime.maps[ipv6MapName],
 		dualStackCIDRPrefixes{previousIPv4, previousIPv6},
-		dualStackCIDRPrefixes(policy),
+		policy,
 		"TC ",
 		"bypass CIDR",
 	)

@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	maxUIDPolicyEntries         = 4096
-	maxBypassCIDRPolicyEntries  = 65536
-	maxHostAddressPolicyEntries = 4096
+	maxUIDPolicyEntries             = 4096
+	maxDestinationCIDRPolicyEntries = 65536
+	maxHostAddressPolicyEntries     = 4096
 )
 
 type uidLPMKey struct {
@@ -34,46 +34,24 @@ type ipv6CIDRLPMKey struct {
 	Address      [16]byte
 }
 
-type BypassCIDRPolicy struct {
-	ipv4 []netip.Prefix
-	ipv6 []netip.Prefix
-}
-
-func CompileBypassCIDRPolicy(prefixes []netip.Prefix) (BypassCIDRPolicy, error) {
-	ipv4, ipv6, err := compileBypassCIDRPolicy(prefixes)
-	return BypassCIDRPolicy{ipv4: ipv4, ipv6: ipv6}, err
-}
-
-// Counts reports how many IPv4 and IPv6 prefixes this policy compiled to,
-// for callers (such as a shared-network backend that mirrors a cgroup
-// backend's map rather than holding its own copy of the prefixes) that only
-// need to know how many entries a previously-applied policy had, not the
-// prefixes themselves.
-func (p BypassCIDRPolicy) Counts() (int, int) {
-	return len(p.ipv4), len(p.ipv6)
-}
-
-func compileUIDPolicy(policy LocalPolicy) ([]uidLPMKey, bool, error) {
-	for name, uidRanges := range map[string][]UIDRange{
-		"include_uid": policy.IncludeUID,
-		"exclude_uid": policy.ExcludeUID,
-	} {
-		for _, uidRange := range uidRanges {
-			if uidRange.Start > uidRange.End {
-				return nil, false, E.New("invalid ", name, " range: ", uidRange.Start, ":", uidRange.End)
-			}
+func compileUIDActionPolicy(decisions []UIDDecision, defaultAction Decision) ([]uidLPMKey, bool, error) {
+	if !defaultAction.Valid() {
+		return nil, false, E.New("invalid eBPF UID default action")
+	}
+	var uidRanges []UIDRange
+	for _, decision := range decisions {
+		if decision.Start > decision.End || !decision.Action.Valid() {
+			return nil, false, E.New("invalid eBPF UID decision")
+		}
+		if decision.Action != defaultAction {
+			uidRanges = append(uidRanges, UIDRange{Start: decision.Start, End: decision.End})
 		}
 	}
-	defaultBypass := policy.IncludeUIDConfigured || len(policy.IncludeUID) > 0
-	uidRanges := policy.ExcludeUID
-	if defaultBypass {
-		uidRanges = subtractUIDRanges(policy.IncludeUID, policy.ExcludeUID)
-	}
-	entries := compileUIDRanges(uidRanges)
+	entries := compileUIDRanges(normalizeUIDRanges(uidRanges))
 	if len(entries) > maxUIDPolicyEntries {
 		return nil, false, E.New("UID policy compiles to too many eBPF map entries: ", len(entries), " > ", maxUIDPolicyEntries)
 	}
-	return entries, defaultBypass, nil
+	return entries, defaultAction == DecisionPass, nil
 }
 
 func compileUIDRanges(uidRanges []UIDRange) []uidLPMKey {
@@ -172,7 +150,7 @@ func subtractUIDRanges(includeRanges []UIDRange, excludeRanges []UIDRange) []UID
 	return result
 }
 
-func compileBypassCIDRPolicy(prefixes []netip.Prefix) ([]netip.Prefix, []netip.Prefix, error) {
+func compileCIDRPrefixes(prefixes []netip.Prefix) ([]netip.Prefix, []netip.Prefix, error) {
 	var ipv4Builder netipx.IPSetBuilder
 	var ipv6Builder netipx.IPSetBuilder
 	for _, prefix := range prefixes {
@@ -200,7 +178,7 @@ func compileBypassCIDRPolicy(prefixes []netip.Prefix) ([]netip.Prefix, []netip.P
 	return ipv4Set.Prefixes(), ipv6Set.Prefixes(), nil
 }
 
-func bypassCIDRPolicyDelta(
+func destinationCIDRPolicyDelta(
 	currentPrefixes []netip.Prefix,
 	nextPrefixes []netip.Prefix,
 ) (additions []netip.Prefix, removals []netip.Prefix) {

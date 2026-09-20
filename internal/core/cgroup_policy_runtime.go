@@ -24,11 +24,11 @@ func validateCgroupMapCapacity(capacity CgroupMapCapacity) error {
 	return nil
 }
 
-func (b *CgroupBackend) UpdateCompiledBypassCIDR(policy BypassCIDRPolicy) (bool, error) {
+func (b *CgroupBackend) updateDestinationCIDRPolicy(policy dualStackCIDRPrefixes) (bool, error) {
 	if b == nil {
 		return false, errBackendClosed
 	}
-	if len(policy.ipv4) > maxBypassCIDRPolicyEntries || len(policy.ipv6) > maxBypassCIDRPolicyEntries {
+	if len(policy.ipv4) > maxDestinationCIDRPolicyEntries || len(policy.ipv6) > maxDestinationCIDRPolicyEntries {
 		return false, E.New("eBPF cgroup bypass CIDR policy exceeds map capacity")
 	}
 	if err := checkLPMTriePolicyCompatibility("eBPF cgroup bypass CIDR", len(policy.ipv4)+len(policy.ipv6)); err != nil {
@@ -65,7 +65,7 @@ func (b *CgroupBackend) UpdateDestinationDecisions(decisions []CIDRDecision) (bo
 	if err != nil {
 		return false, err
 	}
-	return b.UpdateCompiledBypassCIDR(policy)
+	return b.updateDestinationCIDRPolicy(policy)
 }
 
 func (b *CgroupBackend) BypassCIDRCount() (int, int) {
