@@ -64,6 +64,19 @@ private-address, UID, package, MAC, or port configuration. Process tracking
 also receives only final UID actions and is enabled by sing-box according to
 its `router.NeedFindProcess()` decision.
 
+### Runtime mutation rule
+
+An exported update method is not a promise that every field in `ActionPolicy`
+is mutable. Backends accept immutable hook capabilities, listener endpoints,
+map capacities, and static UID/source/port actions at construction time. The
+only supported post-start update is a destination CIDR list containing final
+`DecisionPass` actions, and it is intentionally exposed as a narrow
+destination-update method on each backend. A caller that needs any other
+change must construct a new backend and atomically replace the consumer's
+inbound. This keeps policy compilation in sing-box and prevents a future
+method from accidentally becoming a second, partially implemented
+configuration API.
+
 ## Ownership matrix
 
 | Concern | sing-box | sing-ebpf |

@@ -71,6 +71,11 @@ func TestPublicResourceTypesDoNotExposeRawKernelHandles(t *testing.T) {
 		{name: "SharedPacketRewriteBackend", value: (*SharedPacketRewriteBackend)(nil)},
 	}
 	forbiddenMethods := []string{
+		"UpdateSelector",
+		"SetSelector",
+		"UpdateDNSMode",
+		"UpdateFakeIPPolicy",
+		"UpdateRuleSet",
 		"Map",
 		"LocalEgressProgram",
 		"LocalEgressProgramFD",
