@@ -38,6 +38,7 @@ func AvailableLocalTCInterface(enabled bool, interfaceName string) (string, erro
 type TCRuntime interface {
 	Backend() *core.TCBackend
 	NetworkInfo() core.TCNetworkInfo
+	TCDiagnostics() core.TCDiagnostics
 	Reconcile(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) error
 	HealthCheck(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) (bool, error)
 	RepairInfrastructure() (bool, error)
@@ -109,6 +110,9 @@ func (d *tcDataPlane) NetworkInfo() core.TCNetworkInfo {
 	var info core.TCNetworkInfo
 	if d.delivery != nil {
 		info.DeliveryInterface = d.delivery.deliveryName
+		if d.delivery.delivery != nil && d.delivery.delivery.Attrs() != nil {
+			info.DeliveryInterfaceIndex = d.delivery.delivery.Attrs().Index
+		}
 	}
 	if d.routing != nil {
 		info.RoutingMark = d.routing.mark
@@ -116,6 +120,56 @@ func (d *tcDataPlane) NetworkInfo() core.TCNetworkInfo {
 		info.RoutingPriority = d.routing.priority
 	}
 	return info
+}
+
+// TCDiagnostics returns the effective attachment and delivery state without
+// exposing links, filters, maps, or file descriptors. It is intentionally a
+// request-driven snapshot; no map or netlink scan is performed here.
+func (d *tcDataPlane) TCDiagnostics() core.TCDiagnostics {
+	if d == nil {
+		return core.TCDiagnostics{}
+	}
+	d.access.Lock()
+	defer d.access.Unlock()
+	info := core.TCNetworkInfo{}
+	if d.delivery != nil {
+		info.DeliveryInterface = d.delivery.deliveryName
+		if d.delivery.delivery != nil && d.delivery.delivery.Attrs() != nil {
+			info.DeliveryInterfaceIndex = d.delivery.delivery.Attrs().Index
+		}
+	}
+	if d.routing != nil {
+		info.RoutingMark = d.routing.mark
+		info.RoutingTable = d.routing.table
+		info.RoutingPriority = d.routing.priority
+	}
+	mode := ""
+	for _, attachment := range d.attachments {
+		if attachment.attachmentType == "" {
+			continue
+		}
+		if mode == "" {
+			mode = attachment.attachmentType
+		} else if mode != attachment.attachmentType {
+			mode = "mixed"
+		}
+	}
+	listenerLookupMode := ""
+	requiresRebuild := false
+	if d.backend != nil && !d.backend.IsClosed() {
+		listenerLookupMode = d.backend.TCPListenerLookupMode()
+		requiresRebuild = d.backend.RequiresRebuild()
+	}
+	return core.TCDiagnostics{
+		NetworkInfo:            info,
+		ListenerLookupMode:     listenerLookupMode,
+		AttachmentMode:         mode,
+		AttachmentCount:        len(d.attachments),
+		RetiredAttachmentCount: len(d.retiredAttachments),
+		RetiredDeliveryCount:   len(d.retiredDeliveries),
+		Priority:               d.priority,
+		RequiresRebuild:        requiresRebuild,
+	}
 }
 
 func (d *tcDataPlane) Reconcile(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) error {

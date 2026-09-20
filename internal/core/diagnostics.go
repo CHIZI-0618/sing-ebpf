@@ -17,8 +17,24 @@ type AttachmentInfo struct {
 // delivery and policy-routing state. It intentionally omits netlink objects,
 // routes, rules, sysctl ownership records, and file descriptors.
 type TCNetworkInfo struct {
-	DeliveryInterface string
-	RoutingMark       uint32
-	RoutingTable      int
-	RoutingPriority   int
+	DeliveryInterface      string
+	DeliveryInterfaceIndex int
+	RoutingMark            uint32
+	RoutingTable           int
+	RoutingPriority        int
+}
+
+// TCDiagnostics is a value-only snapshot of the effective TC runtime. It
+// deliberately exposes neither kernel object handles nor loader internals;
+// callers can use it to answer which attachment and delivery path is active
+// without taking ownership of the runtime or scanning maps.
+type TCDiagnostics struct {
+	NetworkInfo            TCNetworkInfo
+	ListenerLookupMode     string
+	AttachmentMode         string
+	AttachmentCount        int
+	RetiredAttachmentCount int
+	RetiredDeliveryCount   int
+	Priority               uint16
+	RequiresRebuild        bool
 }

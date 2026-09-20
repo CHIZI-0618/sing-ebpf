@@ -38,6 +38,29 @@ func TestTCRuntimeNetworkInfoIsValueOnlySnapshot(t *testing.T) {
 	}
 }
 
+func TestTCDiagnosticsReportsEffectiveAttachmentState(t *testing.T) {
+	runtime := &tcDataPlane{
+		backend:  &commonEBPF.TCBackend{},
+		priority: 7,
+		routing:  &tcPolicyRouting{mark: 0x10000, table: 2022, priority: 10000},
+		attachments: []*tcInterfaceAttachment{
+			{interfaceName: "wlan0", interfaceIndex: 4, attachmentType: "tcx"},
+			{interfaceName: "rmnet0", interfaceIndex: 5, attachmentType: "clsact"},
+		},
+		retiredAttachments: []*tcInterfaceAttachment{{interfaceName: "old0"}},
+		retiredDeliveries:  []*tcDeliveryLink{{deliveryName: "old-delivery"}},
+	}
+	diagnostics := runtime.TCDiagnostics()
+	if diagnostics.AttachmentMode != "mixed" || diagnostics.AttachmentCount != 2 ||
+		diagnostics.RetiredAttachmentCount != 1 || diagnostics.RetiredDeliveryCount != 1 ||
+		diagnostics.Priority != 7 || diagnostics.ListenerLookupMode != "" {
+		t.Fatalf("unexpected TC diagnostics: %+v", diagnostics)
+	}
+	if diagnostics.NetworkInfo.RoutingTable != 2022 || diagnostics.NetworkInfo.RoutingPriority != 10000 {
+		t.Fatalf("unexpected TC network diagnostics: %+v", diagnostics.NetworkInfo)
+	}
+}
+
 func TestDesiredTCAttachmentState(t *testing.T) {
 	links := map[string]int{"wlan2": 12, "rndis0": 27}
 	interfaces, err := desiredTCAttachmentState("wlan2", []string{"wlan2", "missing0", "rndis0"}, func(name string) (netlink.Link, error) {

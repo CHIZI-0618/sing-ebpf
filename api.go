@@ -36,6 +36,7 @@ type (
 	TCLinkFraming                  = core.TCLinkFraming
 	AttachmentInfo                 = core.AttachmentInfo
 	TCNetworkInfo                  = core.TCNetworkInfo
+	TCDiagnostics                  = core.TCDiagnostics
 	SelfBypassCgroupConfig         = core.SelfBypassCgroupConfig
 	SelfBypassMode                 = core.SelfBypassMode
 	ProcessSocketOwner             = core.ProcessSocketOwner
