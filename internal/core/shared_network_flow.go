@@ -608,15 +608,13 @@ func deleteMapIfExists(mapFD int, key unsafe.Pointer) error {
 // sharedNetworkStatCount mirrors native/shared_network.h's SB_SHARED_STAT_COUNT.
 // The indices below are the ABI contract with the generated shared-network
 // object; keep them in lockstep with the native definitions.
-const sharedNetworkStatCount = 6
+const sharedNetworkStatCount = 4
 
 const (
 	sharedNetworkStatTokenReservationFailure uint32 = 0
 	sharedNetworkStatRewriteFailure          uint32 = 1
-	sharedNetworkStatIngressPass             uint32 = 2
-	sharedNetworkStatEgressPass              uint32 = 3
-	sharedNetworkStatIngressFragmentPass     uint32 = 4
-	sharedNetworkStatEgressFragmentPass      uint32 = 5
+	sharedNetworkStatIngressFragmentPass     uint32 = 2
+	sharedNetworkStatEgressFragmentPass      uint32 = 3
 )
 
 func (b *SharedPacketRewriteBackend) TokenReservationFailures() (uint64, error) {
@@ -629,19 +627,6 @@ func (b *SharedPacketRewriteBackend) TokenReservationFailures() (uint64, error) 
 // opposed to one this backend's Go side ever decided to drop.
 func (b *SharedPacketRewriteBackend) RewriteFailures() (uint64, error) {
 	return b.sharedStat(sharedNetworkStatRewriteFailure)
-}
-
-// IngressPasses reports packets that the shared ingress program deliberately
-// left to later TC programs. This includes policy bypasses and unsupported
-// traffic; it is sampled from a per-CPU native counter on status queries.
-func (b *SharedPacketRewriteBackend) IngressPasses() (uint64, error) {
-	return b.sharedStat(sharedNetworkStatIngressPass)
-}
-
-// EgressPasses reports packets that the shared egress program deliberately
-// left untouched, such as traffic that does not belong to a proxy token flow.
-func (b *SharedPacketRewriteBackend) EgressPasses() (uint64, error) {
-	return b.sharedStat(sharedNetworkStatEgressPass)
 }
 
 // IngressFragmentPasses reports fragments left untouched because they cannot

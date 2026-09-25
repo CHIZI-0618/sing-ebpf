@@ -428,12 +428,6 @@ func (b *SharedPacketRewriteBackend) TokenReservationFailures() (uint64, error) 
 func (b *SharedPacketRewriteBackend) RewriteFailures() (uint64, error) {
 	return core.UnwrapSharedPacketRewriteBackend(b).RewriteFailures()
 }
-func (b *SharedPacketRewriteBackend) IngressPasses() (uint64, error) {
-	return core.UnwrapSharedPacketRewriteBackend(b).IngressPasses()
-}
-func (b *SharedPacketRewriteBackend) EgressPasses() (uint64, error) {
-	return core.UnwrapSharedPacketRewriteBackend(b).EgressPasses()
-}
 func (b *SharedPacketRewriteBackend) IngressFragmentPasses() (uint64, error) {
 	return core.UnwrapSharedPacketRewriteBackend(b).IngressFragmentPasses()
 }

@@ -29,8 +29,6 @@ func TestSharedNetworkStatsReadCleanlyWithNoFailures(t *testing.T) {
 		t.Fatalf("RewriteFailures = %d, want 0 on a backend that has processed nothing", rewriteFailures)
 	}
 	for name, read := range map[string]func() (uint64, error){
-		"IngressPasses":         backend.IngressPasses,
-		"EgressPasses":          backend.EgressPasses,
 		"IngressFragmentPasses": backend.IngressFragmentPasses,
 		"EgressFragmentPasses":  backend.EgressFragmentPasses,
 	} {
@@ -61,8 +59,6 @@ func TestSharedNetworkStatsAllCategoriesIndependent(t *testing.T) {
 	}{
 		{"token reservation failure", sharedNetworkStatTokenReservationFailure, backend.TokenReservationFailures},
 		{"rewrite failure", sharedNetworkStatRewriteFailure, backend.RewriteFailures},
-		{"ingress pass", sharedNetworkStatIngressPass, backend.IngressPasses},
-		{"egress pass", sharedNetworkStatEgressPass, backend.EgressPasses},
 		{"ingress fragment pass", sharedNetworkStatIngressFragmentPass, backend.IngressFragmentPasses},
 		{"egress fragment pass", sharedNetworkStatEgressFragmentPass, backend.EgressFragmentPasses},
 	}
