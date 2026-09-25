@@ -270,7 +270,7 @@ static void (*sk_release)(struct bpf_sock *socket) = (void *)BPF_FUNC_sk_release
 INLINE void increment_stat(__u32 index) {
     if (index >= SB_TC_STAT_COUNT) return;
     __u64 *value = map_lookup(&tc_stats, &index);
-    if (value != 0) __sync_fetch_and_add(value, 1U);
+    if (value != 0) *value += 1U;
 }
 
 INLINE __u16 network_order16(__u16 value) {

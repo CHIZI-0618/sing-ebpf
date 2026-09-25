@@ -70,13 +70,8 @@ func InspectMapOccupancy() MapOccupancyReport {
 			continue
 		}
 		item.Supported = true
-		key := make([]byte, info.KeySize)
-		value := make([]byte, info.ValueSize)
-		iterator := m.Iterate()
-		for iterator.Next(&key, &value) {
-			item.Entries++
-		}
-		if err = iterator.Err(); err != nil {
+		item.Entries, err = countMapKeys(m, info.KeySize, info.MaxEntries)
+		if err != nil {
 			item.Error = err.Error()
 		}
 		report.Maps = append(report.Maps, item)
@@ -84,6 +79,27 @@ func InspectMapOccupancy() MapOccupancyReport {
 	}
 	sort.Slice(report.Maps, func(i, j int) bool { return report.Maps[i].Name < report.Maps[j].Name })
 	return report
+}
+
+var errMapKeyIterationAborted = errors.New("map key iteration aborted")
+
+func countMapKeys(m *CiliumEBPF.Map, keySize uint32, maxEntries uint32) (uint32, error) {
+	key := make([]byte, keySize)
+	next := make([]byte, keySize)
+	err := m.NextKey(nil, &next)
+	var entries uint32
+	for err == nil {
+		if entries >= maxEntries {
+			return entries, errMapKeyIterationAborted
+		}
+		entries++
+		copy(key, next)
+		err = m.NextKey(key, &next)
+	}
+	if errors.Is(err, CiliumEBPF.ErrKeyNotExist) {
+		return entries, nil
+	}
+	return entries, err
 }
 
 func occupancySupported(typ CiliumEBPF.MapType) bool {

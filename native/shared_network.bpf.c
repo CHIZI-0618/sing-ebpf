@@ -89,11 +89,9 @@ INLINE void record_rewrite_failure(void) {
     record_shared_stat(SB_SHARED_STAT_REWRITE_FAILURE);
 }
 INLINE int shared_ingress_pass(void) {
-    record_shared_stat(SB_SHARED_STAT_INGRESS_PASS);
     return SB_SHARED_ACT_CONTINUE;
 }
 INLINE int shared_egress_pass(void) {
-    record_shared_stat(SB_SHARED_STAT_EGRESS_PASS);
     return SB_SHARED_ACT_CONTINUE;
 }
 INLINE int shared_ingress_fragment_pass(void) {
