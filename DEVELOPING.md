@@ -132,6 +132,13 @@ the effective path. In particular, the runtime cgroup diagnostics distinguish
 `link_create`, `legacy_multi`, `legacy_exclusive`, and `mixed` attachment paths,
 as well as the effective UDP cleanup, socket-storage, and time-source modes.
 
+These fallbacks are kernel-capability compatibility, not transitional API
+compatibility. Keep them while supported Linux and Android kernels may select
+different map, verifier, helper, or attachment paths. Remove compatibility
+shorthands, old consumer-facing aliases, and superseded diagnostics fields in
+the consumer and dashboard only after their migration is complete; do not
+delete a native fallback merely because a newer kernel is used in CI.
+
 ## Lifecycle and concurrency review
 
 Trace construction, successful start, partial start, reconcile, and close.
