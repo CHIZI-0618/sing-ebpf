@@ -99,9 +99,6 @@ func (b *CgroupBackend) UDPStorageMode() string {
 	if b.runtime == nil || !b.runtime.enable_udp {
 		return "disabled"
 	}
-	if b.runtime.socket_storage_supported {
-		return "socket_storage"
-	}
 	return "lru"
 }
 

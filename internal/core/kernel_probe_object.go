@@ -87,12 +87,11 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 		return "Loads the generated cgroup programs without attaching cgroup hooks.", err
 	}
 	runtimeState := &cgroupRuntime{
-		maps:                     make(map[string]*CiliumEBPF.Map),
-		programs:                 make([]*CiliumEBPF.Program, cgroupProgramCount),
-		enable_tcp:               plan.enableTCP,
-		enable_udp:               plan.enableUDP,
-		coarse_time_supported:    plan.enableUDP && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil,
-		socket_storage_supported: plan.enableUDP && probeCgroupSocketStorageSupport(),
+		maps:                  make(map[string]*CiliumEBPF.Map),
+		programs:              make([]*CiliumEBPF.Program, cgroupProgramCount),
+		enable_tcp:            plan.enableTCP,
+		enable_udp:            plan.enableUDP,
+		coarse_time_supported: plan.enableUDP && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil,
 	}
 	backend := &CgroupBackend{
 		runtime:      runtimeState,
@@ -113,9 +112,6 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 	if err == nil {
 		if runtimeState.coarse_time_supported {
 			detail += " The coarse-time UDP variant loaded."
-		}
-		if runtimeState.socket_storage_supported {
-			detail += " The socket-storage UDP variant loaded."
 		}
 	}
 	return detail, errors.Join(err, backend.Close(), selfBypass.Close())

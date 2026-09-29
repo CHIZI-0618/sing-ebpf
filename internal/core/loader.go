@@ -25,8 +25,6 @@ var loadCgroup = BPFGen.LoadCgroup
 
 var loadCgroupCoarse = BPFGen.LoadCgroupCoarse
 
-var loadCgroupStorage = BPFGen.LoadCgroupStorage
-
 var loadSharedNetwork = BPFGen.LoadSharedNetwork
 
 var loadICMPEchoReply = BPFGen.LoadICMPEchoReply
@@ -115,8 +113,7 @@ func loadObjectMaps(
 			delete(spec.Maps, name)
 			continue
 		}
-		if override.name == "" || override.mapType == CiliumEBPF.UnspecifiedMap ||
-			(override.maxEntries == 0 && override.mapType != CiliumEBPF.SkStorage) {
+		if override.name == "" || override.mapType == CiliumEBPF.UnspecifiedMap || override.maxEntries == 0 {
 			return nil, E.New("invalid eBPF map override for ", name)
 		}
 		mapSpec.Name = override.name

@@ -97,22 +97,6 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	if err = validateCgroupUDPCleanupMaps(runtimeState); err != nil {
 		return err
 	}
-	if runtimeState.socket_storage_supported {
-		storageMaps, storageErr := loadObjectMaps(loadCgroupStorage, map[string]mapSpecOverride{
-			"cgroup_udp_socket_storage": {
-				name:       "sb_cg_udp_sock",
-				mapType:    CiliumEBPF.SkStorage,
-				maxEntries: 0,
-				flags:      bpfFlagNoPrealloc,
-			},
-		})
-		if storageErr == nil && storageMaps["cgroup_udp_socket_storage"] != nil {
-			runtimeState.maps["cgroup_udp_socket_storage"] = storageMaps["cgroup_udp_socket_storage"]
-		} else {
-			_ = closeMaps(storageMaps)
-			runtimeState.socket_storage_supported = false
-		}
-	}
 	if events := runtimeState.maps["cgroup_udp_release_events"]; events != nil {
 		reader, readerErr := ringbuf.NewReader(events)
 		if readerErr == nil {
@@ -137,12 +121,6 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	runtimeState.host_ipv4_map_fd = runtimeState.maps["cgroup_host_ipv4"].FD()
 	runtimeState.host_ipv6_map_fd = runtimeState.maps["cgroup_host_ipv6"].FD()
 	return nil
-}
-
-func probeCgroupSocketStorageSupport() bool {
-	return features.HaveMapType(CiliumEBPF.SkStorage) == nil &&
-		features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnSkStorageGet) == nil &&
-		features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnSkStorageDelete) == nil
 }
 
 type cgroupUDPMapLayout struct {
