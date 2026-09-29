@@ -49,7 +49,11 @@ generate:
 check:
 	@set -e; \
 	temporary="$$(mktemp -d)"; \
-	trap 'rm -rf "$$temporary"' EXIT; \
+	restore() { \
+		for file in $(GENERATED); do cp "$$temporary/$$file" "$$file"; done; \
+		rm -rf "$$temporary"; \
+	}; \
+	trap restore EXIT; \
 	mkdir -p "$$temporary/$(GENERATED_DIR)"; \
 	cp $(GENERATED) "$$temporary/$(GENERATED_DIR)"; \
 	$(MAKE) generate; \
@@ -62,6 +66,13 @@ check:
 			esac; \
 			exit 1; \
 		}; \
+	done
+	@set -e; \
+	for file in $(GENERATED_DIR)/*_bpfel.go $(GENERATED_DIR)/*_bpfel.o $(GENERATED_DIR)/*_bpfeb.go $(GENERATED_DIR)/*_bpfeb.o; do \
+		case " $(GENERATED) " in \
+			*" $$file "*) ;; \
+			*) echo "unexpected generated eBPF artifact: $$file" >&2; exit 1 ;; \
+		esac; \
 	done
 
 clean:
