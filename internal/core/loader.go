@@ -19,6 +19,8 @@ const bpfFlagNoPrealloc = 1
 
 var rawAttachProgram = link.RawAttachProgram
 
+var queryCgroupPrograms = link.QueryPrograms
+
 var loadTC = BPFGen.LoadTC
 
 var loadCgroup = BPFGen.LoadCgroup
@@ -52,6 +54,14 @@ func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachTyp
 	}
 	if !cgroupMultiAttachUnavailable(multiErr) {
 		return "", multiErr
+	}
+	// An unflagged legacy attach replaces the current exclusive owner. Do not
+	// displace a vendor/OS cgroup hook that we cannot restore after shutdown;
+	// callers will use their userspace fallback instead. Kernels without
+	// BPF_PROG_QUERY retain the historical fallback because there is no safe
+	// way to distinguish an empty hook from an unqueryable one.
+	if result, queryErr := queryCgroupPrograms(link.QueryOptions{Target: target, Attach: attachType}); queryErr == nil && len(result.Programs) > 0 {
+		return "", E.New("refusing to replace existing cgroup program owner")
 	}
 	// Keep the legacy fallback used before multi-only attachment was adopted.
 	// Some vendor kernels reject ALLOW_MULTI for otherwise usable hooks. An

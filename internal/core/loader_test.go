@@ -57,6 +57,32 @@ func TestRawCgroupAttachFallsBackToExclusiveAfterMultiCompatibilityError(t *test
 	}
 }
 
+func TestRawCgroupAttachPreservesExistingOwner(t *testing.T) {
+	originalRawAttachProgram := rawAttachProgram
+	originalQuery := queryCgroupPrograms
+	t.Cleanup(func() {
+		rawAttachProgram = originalRawAttachProgram
+		queryCgroupPrograms = originalQuery
+	})
+	var flags []uint32
+	rawAttachProgram = func(current link.RawAttachProgramOptions) error {
+		flags = append(flags, current.Flags)
+		if current.Flags == unix.BPF_F_ALLOW_MULTI {
+			return unix.EPERM
+		}
+		return nil
+	}
+	queryCgroupPrograms = func(link.QueryOptions) (*link.QueryResult, error) {
+		return &link.QueryResult{Programs: []link.AttachedProgram{{ID: 1}}}, nil
+	}
+	if err := attachProgramRaw(42, nil, CiliumEBPF.AttachCGroupInet4Connect); err == nil {
+		t.Fatal("existing cgroup owner was replaced")
+	}
+	if !slices.Equal(flags, []uint32{unix.BPF_F_ALLOW_MULTI}) {
+		t.Fatalf("flags=%v, want only the non-destructive multi attach", flags)
+	}
+}
+
 func TestRawCgroupAttachFallbackErrors(t *testing.T) {
 	for _, multiErr := range []error{
 		unix.EINVAL,
