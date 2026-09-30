@@ -80,8 +80,7 @@ INLINE const struct sb_ebpf_cgroup_control *control(void) {
     __u32 key = 0U;
     return map_lookup(&cgroup_control, &key);
 }
-INLINE bool is_cookie_bypassed(void *ctx) {
-    __u64 cookie = get_socket_cookie(ctx);
+INLINE bool is_cookie_bypassed(__u64 cookie) {
     if (cookie == 0U) return false;
     __u32 *metadata = map_lookup(&cgroup_socket_bypass, &cookie);
     return metadata != 0 &&
@@ -146,9 +145,9 @@ INLINE bool host_ipv6(const __u32 address[4]) {
     return map_lookup(&cgroup_host_ipv6, &key) != 0;
 }
 
-INLINE bool base_bypass(void *ctx, const struct sb_ebpf_cgroup_control *config, __u8 protocol) {
+INLINE bool base_bypass(__u64 cookie, const struct sb_ebpf_cgroup_control *config, __u8 protocol) {
     if (!protocol_selected(config, protocol)) return true;
-    if (is_cookie_bypassed(ctx)) return true;
+	if (is_cookie_bypassed(cookie)) return true;
     return false;
 }
 
@@ -484,8 +483,8 @@ INLINE int handle_v4(
         protocol = connect_hook ? ctx->protocol : UDP_VALUE;
     }
     __u16 port = swap16((__u16)ctx->user_port);
-    if (base_bypass(ctx, config, protocol)) return 1;
     __u64 cookie = get_socket_cookie(ctx);
+	if (base_bypass(cookie, config, protocol)) return 1;
     __u32 destination = ctx->user_ip4;
     if (!connect_hook && restore_connected_token(
             ctx, cookie, false, destination == 0U || port == 0U)) {
@@ -577,8 +576,8 @@ INLINE int handle_v6(
         protocol = connect_hook ? ctx->protocol : UDP_VALUE;
     }
     __u16 port = swap16((__u16)ctx->user_port);
-    if (base_bypass(ctx, config, protocol)) return 1;
     __u64 cookie = get_socket_cookie(ctx);
+	if (base_bypass(cookie, config, protocol)) return 1;
     bool missing_destination =
         (address[0] | address[1] | address[2] | address[3]) == 0U || port == 0U;
     if (!connect_hook && restore_connected_token(ctx, cookie, true, missing_destination)) return 1;
