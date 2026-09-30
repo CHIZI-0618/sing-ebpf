@@ -53,6 +53,7 @@ type (
 	RuntimeState                   = core.RuntimeState
 	MapOccupancy                   = core.MapOccupancy
 	MapOccupancyReport             = core.MapOccupancyReport
+	UDPStateDiagnostics            = core.UDPStateDiagnostics
 )
 
 const (

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strings"
 )
 
 type KernelProbeMode string
@@ -113,6 +114,7 @@ func (p kernelProbePlan) needsTCProgram() bool {
 
 type KernelProbeFinding struct {
 	Status     KernelProbeStatus     `json:"status"`
+	Reason     string                `json:"reason,omitempty"`
 	Scope      string                `json:"scope"`
 	Importance KernelProbeImportance `json:"importance"`
 	Feature    string                `json:"feature"`
@@ -139,13 +141,32 @@ func (r *KernelProbeReport) Add(
 	feature string,
 	detail string,
 ) {
+	reason := classifyKernelProbeReason(detail)
 	r.Findings = append(r.Findings, KernelProbeFinding{
 		Status:     status,
+		Reason:     reason,
 		Scope:      scope,
 		Importance: importance,
 		Feature:    feature,
 		Detail:     detail,
 	})
+}
+
+func classifyKernelProbeReason(detail string) string {
+	switch {
+	case strings.Contains(detail, "verifier"):
+		return "verifier_rejected"
+	case strings.Contains(detail, "permission") || strings.Contains(detail, "denied") || strings.Contains(detail, "EPERM") || strings.Contains(detail, "EACCES"):
+		return "not_permitted"
+	case strings.Contains(detail, "busy") || strings.Contains(detail, "owner") || strings.Contains(detail, "conflict"):
+		return "attach_conflict"
+	case strings.Contains(detail, "temporarily") || strings.Contains(detail, "absent"):
+		return "temporarily_unavailable"
+	case strings.Contains(detail, "unsupported") || strings.Contains(detail, "unavailable") || strings.Contains(detail, "not supported"):
+		return "unsupported"
+	default:
+		return ""
+	}
 }
 
 func (r *KernelProbeReport) RequiredFailures() int {

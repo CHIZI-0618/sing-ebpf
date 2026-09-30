@@ -84,6 +84,22 @@ func TestKernelProbeReportCounts(t *testing.T) {
 	}
 }
 
+func TestKernelProbeFindingReason(t *testing.T) {
+	for detail, want := range map[string]string{
+		"verifier rejected program":    "verifier_rejected",
+		"permission denied by SELinux": "not_permitted",
+		"another owner is attached":    "attach_conflict",
+		"interface absent":             "temporarily_unavailable",
+		"feature unsupported":          "unsupported",
+	} {
+		report := &KernelProbeReport{}
+		report.Add(KernelProbeFail, "local", KernelProbeRequired, "feature", detail)
+		if got := report.Findings[0].Reason; got != want {
+			t.Fatalf("detail %q: reason=%q, want %q", detail, got, want)
+		}
+	}
+}
+
 func TestKernelProbeSuccessfulResultIsPreflight(t *testing.T) {
 	report := &KernelProbeReport{}
 	report.Add(KernelProbePass, "common", KernelProbeRequired, "map", "available")

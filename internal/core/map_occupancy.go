@@ -22,6 +22,7 @@ type MapOccupancy struct {
 	ValueSize  uint32           `json:"value_size"`
 	Flags      uint32           `json:"flags"`
 	Entries    uint32           `json:"entries,omitempty"`
+	Pressure   string           `json:"pressure"`
 	Supported  bool             `json:"supported"`
 	Error      string           `json:"error,omitempty"`
 }
@@ -65,6 +66,7 @@ func InspectMapOccupancy() MapOccupancyReport {
 		}
 		if !occupancySupported(info.Type) {
 			item.Error = "map type does not support safe key iteration"
+			item.Pressure = "recovery_failed"
 			report.Maps = append(report.Maps, item)
 			_ = m.Close()
 			continue
@@ -74,11 +76,37 @@ func InspectMapOccupancy() MapOccupancyReport {
 		if err != nil {
 			item.Error = err.Error()
 		}
+		item.Pressure = mapPressure(item.Entries, item.MaxEntries, item.Error != "")
 		report.Maps = append(report.Maps, item)
 		_ = m.Close()
 	}
+	for _, item := range report.Maps {
+		if item.Pressure == "degraded" || item.Pressure == "recovery_failed" {
+			report.Status = "degraded"
+		} else if item.Pressure == "warning" && report.Status == "pass" {
+			report.Status = "warning"
+		}
+	}
 	sort.Slice(report.Maps, func(i, j int) bool { return report.Maps[i].Name < report.Maps[j].Name })
 	return report
+}
+
+func mapPressure(entries, maxEntries uint32, failed bool) string {
+	if failed {
+		return "recovery_failed"
+	}
+	if maxEntries == 0 {
+		return "unknown"
+	}
+	ratio := float64(entries) / float64(maxEntries)
+	switch {
+	case ratio >= 0.95:
+		return "degraded"
+	case ratio >= 0.85:
+		return "warning"
+	default:
+		return "healthy"
+	}
 }
 
 var errMapKeyIterationAborted = errors.New("map key iteration aborted")

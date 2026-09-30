@@ -44,6 +44,23 @@ func TestCgroupUDPMapConfigurationKeepsFlowCacheWithoutSocketRelease(t *testing.
 	}
 }
 
+func TestMapPressureLevels(t *testing.T) {
+	for _, testCase := range []struct {
+		entries, capacity uint32
+		failed            bool
+		want              string
+	}{
+		{10, 100, false, "healthy"},
+		{85, 100, false, "warning"},
+		{95, 100, false, "degraded"},
+		{0, 100, true, "recovery_failed"},
+	} {
+		if got := mapPressure(testCase.entries, testCase.capacity, testCase.failed); got != testCase.want {
+			t.Fatalf("mapPressure(%d/%d, %v)=%q, want %q", testCase.entries, testCase.capacity, testCase.failed, got, testCase.want)
+		}
+	}
+}
+
 func TestSocketReleaseAttachPermissionFallsBack(t *testing.T) {
 	for _, errno := range []error{unix.EPERM, unix.EACCES} {
 		if !socketReleaseAttachUnavailable(fmt.Errorf("attach socket release: %w", errno)) {

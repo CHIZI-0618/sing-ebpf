@@ -15,7 +15,62 @@ const (
 	cgroupUDPReleaseRingSize            = 64 * 1024
 	cgroupUDPUserspaceCleanupDeadline   = "deadline"
 	cgroupUDPUserspaceCleanupRingBuffer = "ringbuf"
+	cgroupUDPStateFull                  = "full"
+	cgroupUDPStateSocketRelease         = "socket_release"
+	cgroupUDPStateReleaseNotification   = "release_notification"
+	cgroupUDPStateTimeoutFallback       = "timeout_fallback"
+	cgroupUDPStateRecoveryDegraded      = "recovery_degraded"
+	cgroupUDPStateMapPressure           = "map_pressure"
 )
+
+// UDPStateDiagnostics describes the effective cleanup and recovery path. It
+// is a snapshot and performs no map iteration or probing.
+type UDPStateDiagnostics struct {
+	State                string `json:"state"`
+	CleanupMode          string `json:"cleanup_mode"`
+	UserspaceCleanupMode string `json:"userspace_cleanup_mode"`
+	RecoveryMode         string `json:"recovery_mode"`
+	SocketRelease        bool   `json:"socket_release"`
+	NetworkGeneration    uint32 `json:"network_generation"`
+	MapPressure          string `json:"map_pressure"`
+}
+
+func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
+	result := UDPStateDiagnostics{State: cgroupUDPStateFull, RecoveryMode: "reverse_index"}
+	if b == nil {
+		result.State = cgroupUDPStateRecoveryDegraded
+		return result
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil || !b.runtime.enable_udp {
+		result.State = cgroupUDPCleanupDisabled
+		result.CleanupMode = cgroupUDPCleanupDisabled
+		result.UserspaceCleanupMode = cgroupUDPCleanupDisabled
+		result.RecoveryMode = "disabled"
+		return result
+	}
+	result.CleanupMode = cgroupUDPCleanupModeLocked(b.runtime)
+	result.UserspaceCleanupMode = cgroupUDPUserspaceCleanupModeLocked(b.runtime)
+	result.SocketRelease = b.runtime.socket_release_supported
+	result.NetworkGeneration = b.networkGeneration
+	if result.SocketRelease {
+		result.State = cgroupUDPStateSocketRelease
+		if result.UserspaceCleanupMode == cgroupUDPUserspaceCleanupRingBuffer {
+			result.State = cgroupUDPStateReleaseNotification
+		}
+	} else {
+		result.State = cgroupUDPStateTimeoutFallback
+	}
+	return result
+}
+
+func cgroupUDPUserspaceCleanupModeLocked(runtimeState *cgroupRuntime) string {
+	if runtimeState != nil && runtimeState.enable_udp && runtimeState.udp_release_observer && runtimeState.udp_release_reader != nil {
+		return cgroupUDPUserspaceCleanupRingBuffer
+	}
+	return cgroupUDPUserspaceCleanupDeadline
+}
 
 func (b *CgroupBackend) CgroupPath() string {
 	if b == nil {
@@ -108,11 +163,7 @@ func (b *CgroupBackend) UDPUserspaceCleanupMode() string {
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
-	if b.runtime != nil && b.runtime.enable_udp && b.runtime.udp_release_observer &&
-		b.runtime.udp_release_reader != nil {
-		return cgroupUDPUserspaceCleanupRingBuffer
-	}
-	return cgroupUDPUserspaceCleanupDeadline
+	return cgroupUDPUserspaceCleanupModeLocked(b.runtime)
 }
 
 // UDPReleaseNotificationDrops returns the number of socket-release events
