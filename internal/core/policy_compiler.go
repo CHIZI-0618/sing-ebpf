@@ -196,7 +196,11 @@ func compileActionScope(scope ActionScope, name string) (compiledActionScope, du
 	}
 	for _, rule := range scope.DestinationPort {
 		if rule.Action != DecisionPass {
-			if scope.Default == DecisionPass {
+			// DNS hijack is a control-plane mode, not a normal destination-port
+			// exception. It intentionally remains global even when a UID policy
+			// makes ordinary traffic default to pass, so include_package can be
+			// combined with dns_mode=hijack without silently degrading hijack.
+			if scope.Default == DecisionPass && !isDNSHijackPort(rule) {
 				return compiledActionScope{}, dualStackCIDRPrefixes{}, netip.Prefix{}, netip.Prefix{}, E.New(name, " cannot override a pass default with port intercept")
 			}
 			continue
@@ -209,4 +213,9 @@ func compileActionScope(scope ActionScope, name string) (compiledActionScope, du
 		}
 	}
 	return result, bypass, forceIPv4, forceIPv6, nil
+}
+
+func isDNSHijackPort(rule PortDecision) bool {
+	return rule.Action == DecisionIntercept && rule.Port == 53 &&
+		(rule.Protocol == ProtocolTCP || rule.Protocol == ProtocolUDP)
 }

@@ -180,6 +180,39 @@ func TestCompileActionPolicySnapshot(t *testing.T) {
 	}
 }
 
+func TestCompileActionPolicyAllowsGlobalDNSHijackWithUIDPassDefault(t *testing.T) {
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		EnableUDP: true,
+		Local: ActionScope{
+			Default: DecisionPass,
+			UID:     []UIDDecision{{Start: 1000, End: 1000, Action: DecisionIntercept}},
+			DestinationPort: []PortDecision{
+				{Protocol: ProtocolTCP, Port: 53, Action: DecisionIntercept},
+				{Protocol: ProtocolUDP, Port: 53, Action: DecisionIntercept},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.localDNSMode != DNSModeHijack || !policy.uidDefaultBypass {
+		t.Fatalf("DNS hijack or UID pass-default was lost: mode=%v default_bypass=%v", policy.localDNSMode, policy.uidDefaultBypass)
+	}
+}
+
+func TestCompileActionPolicyStillRejectsNonDNSPortInterceptWithUIDPassDefault(t *testing.T) {
+	_, err := CompileActionPolicy(ActionPolicy{
+		Local: ActionScope{
+			Default:         DecisionPass,
+			DestinationPort: []PortDecision{{Protocol: ProtocolTCP, Port: 443, Action: DecisionIntercept}},
+		},
+	})
+	if err == nil {
+		t.Fatal("non-DNS port intercept unexpectedly overrode a pass default")
+	}
+}
+
 func TestDestinationCIDRPolicyDelta(t *testing.T) {
 	current := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
