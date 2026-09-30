@@ -131,6 +131,15 @@ an optional fallback failure into a silent feature claim; diagnostics must name
 the effective path. In particular, the runtime cgroup diagnostics distinguish
 `link_create`, `legacy_multi`, `legacy_exclusive`, and `mixed` attachment paths,
 as well as the effective UDP cleanup, socket-storage, and time-source modes.
+The socket-release capability probe is deliberately multi-only: it must never
+fall back to an unflagged attach that could replace an existing cgroup owner.
+The ordinary cgroup hook attach may still use the legacy-exclusive fallback
+after querying for an existing owner.
+
+On kernels without `BPF_MAP_LOOKUP_AND_DELETE_ELEM`, userspace must not emulate
+atomic consume with separate lookup and delete syscalls. It retains the bounded
+entry and lets normal expiry or LRU cleanup reclaim it. Tests for this path must
+prove that a concurrent replacement is not deleted accidentally.
 
 These fallbacks are kernel-capability compatibility, not transitional API
 compatibility. Keep them while supported Linux and Android kernels may select
@@ -160,6 +169,11 @@ Every resource must have one owner and appear in reverse-order cleanup. Verify:
 Shared runtime notifications are delivered after releasing the runtime lock.
 `PrepareBackend` is different: it is a synchronous factory inside the
 reconciliation transaction and must not call back into the runtime.
+
+Retired TC attachments/delivery links and shared packet-rewrite attachments use
+bounded 16-entry cleanup queues. A failed cleanup is retried before new
+resources are released; when failures persist, the oldest retained reference
+is evicted at the bound instead of accumulating unbounded state.
 
 ## TC runtime diagnostics
 

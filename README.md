@@ -116,7 +116,10 @@ restore the original peer.
 Userspace rejects redirect address and route conflicts before attachment and
 owns only the local routes it created. The TCP token map is an LRU map so
 abandoned connect attempts cannot permanently exhaust it. UDP uses
-socket-release cleanup when supported and bounded LRU recovery otherwise.
+socket-release cleanup when the optional multi-program probe succeeds;
+otherwise it uses bounded LRU recovery. The probe never performs an
+unflagged legacy attach, so it cannot replace an existing Android/netd
+socket-release owner merely to test the optional capability.
 
 The interception cgroup is independent of an optional exclusive process cgroup
 used for self-bypass. A broad interception cgroup still excludes consumer-owned
@@ -140,7 +143,8 @@ bounded LRU map. Userspace then reads only `/proc/<pid>/exe` instead of scanning
 all process file descriptors. If the tracker cannot be attached, normal route
 process search remains the fallback. A cgroup `sock_release` hook removes owner
 records immediately when supported; otherwise the bounded LRU map remains the
-cleanup fallback.
+cleanup fallback. Its capability probe is multi-only and does not displace an
+existing cgroup owner.
 Raw-IP shared links mark the source MAC as unavailable rather than publishing a
 synthetic address. Source MAC policy therefore requires Ethernet framing.
 
@@ -188,6 +192,7 @@ CIDR maps are separate, so a consumer can update `local.bypass_rule_set` and
 | --- | --- | --- |
 | control | `ARRAY` | Enable state, path flags, listener port, and delivery interface identity. |
 | sockets and assignments | `SOCKMAP` (optional), `LRU_HASH` | Preferred TCP listener fallback, original-flow metadata, and local self-bypass cookies. Legacy TCP lookup does not use SOCKMAP. |
+| local cgroup UDP state | `HASH`/`LRU_HASH`, `LRU_HASH` | Redirect/token maps use preallocated `HASH` with socket-release cleanup, or bounded `LRU_HASH` without it; peer state follows the same capability and flow state is always bounded. |
 | prefix policy | `LPM_TRIE` | UID ranges, source CIDRs, and destination bypass CIDRs. |
 | exact policy | `HASH` | Host addresses and shared source MAC policy. |
 | packet rewrite scratch | `PERCPU_ARRAY` | Per-CPU scratch and counters used only by shared `packet_rewrite`. |
@@ -247,7 +252,10 @@ operation. Topology reconciliation purges userspace UDP state, disables the
 control map, replaces attachments and host policy, and then enables the backend.
 A failed update attempts to restore the previous state before re-enabling. When
 the default interface disappears, the last local attachment is retained until a
-new interface is available.
+new interface is available. Retired TC and shared packet-rewrite resources are
+kept in bounded cleanup queues (16 entries per queue); when cleanup failures
+persist, the oldest retained reference is evicted at the bound instead of
+allowing file descriptors and memory to grow without limit.
 
 Runtime shutdown disables interception, detaches filters or BPF links, removes
 policy routing, restores delivery sysctls, removes the veth, and closes programs
