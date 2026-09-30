@@ -405,14 +405,11 @@ func (b *CgroupBackend) takeMapElement(mapFD int, key unsafe.Pointer, value unsa
 		}
 		b.lookupAndDeleteMode.Store(mapLookupAndDeleteUnsupported)
 	}
-	if err := lookupMap(mapFD, key, value); err != nil {
-		return err
-	}
-	err := deleteMap(mapFD, key)
-	if errors.Is(err, unix.ENOENT) {
-		return nil
-	}
-	return err
+	// Do not emulate LOOKUP_AND_DELETE with two syscalls. A concurrent BPF
+	// update can replace the value between them, causing userspace to delete a
+	// newer redirect. The maps are bounded/LRU, so retaining the value is safer
+	// than corrupting a live flow; the normal cleanup path will reclaim it.
+	return lookupMap(mapFD, key, value)
 }
 
 func mapLookupAndDeleteUnavailable(err error) bool {
