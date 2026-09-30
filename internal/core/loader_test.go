@@ -35,6 +35,25 @@ func TestRawCgroupAttachPrefersMulti(t *testing.T) {
 	}
 }
 
+func TestRawCgroupAttachMultiOnlyNeverFallsBack(t *testing.T) {
+	originalRawAttachProgram := rawAttachProgram
+	t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })
+	callCount := 0
+	rawAttachProgram = func(current link.RawAttachProgramOptions) error {
+		callCount++
+		if current.Flags != unix.BPF_F_ALLOW_MULTI {
+			t.Fatalf("multi-only probe used flags %#x", current.Flags)
+		}
+		return unix.EPERM
+	}
+	if err := attachProgramRawMultiOnly(42, nil, CiliumEBPF.AttachCgroupInetSockRelease); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("multi-only attach error = %v, want EPERM", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("multi-only attach called %d times, want one attempt", callCount)
+	}
+}
+
 func TestRawCgroupAttachFallsBackToExclusiveAfterMultiCompatibilityError(t *testing.T) {
 	originalRawAttachProgram := rawAttachProgram
 	t.Cleanup(func() { rawAttachProgram = originalRawAttachProgram })

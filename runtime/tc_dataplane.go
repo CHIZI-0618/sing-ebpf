@@ -37,6 +37,11 @@ const (
 	tcxSupportUnavailable = -1
 )
 
+// A failed Close can leave a link pending while reconcile keeps discovering
+// new replacements. Bound the retained references so a permanently failing
+// kernel cleanup cannot grow memory and file-descriptor usage without limit.
+const maxRetiredTCResources = 16
+
 type tcInterfaceRole struct {
 	local  bool
 	shared bool
@@ -129,6 +134,26 @@ type tcDataPlane struct {
 	// interfaces, which is the only way to reach the ordering between releasing
 	// an attachment and taking the interface lock of the one that replaced it.
 	hooks *tcDataPlaneHooks
+}
+
+func (d *tcDataPlane) retainRetiredAttachment(attachment *tcInterfaceAttachment) {
+	if d == nil || attachment == nil || attachment.IsClosed() {
+		return
+	}
+	if len(d.retiredAttachments) >= maxRetiredTCResources {
+		d.retiredAttachments = append(d.retiredAttachments[:0], d.retiredAttachments[1:]...)
+	}
+	d.retiredAttachments = append(d.retiredAttachments, attachment)
+}
+
+func (d *tcDataPlane) retainRetiredDelivery(delivery *tcDeliveryLink) {
+	if d == nil || delivery == nil || delivery.IsClosed() {
+		return
+	}
+	if len(d.retiredDeliveries) >= maxRetiredTCResources {
+		d.retiredDeliveries = append(d.retiredDeliveries[:0], d.retiredDeliveries[1:]...)
+	}
+	d.retiredDeliveries = append(d.retiredDeliveries, delivery)
 }
 
 type tcDataPlaneHooks struct {

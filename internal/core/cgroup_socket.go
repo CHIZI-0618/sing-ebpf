@@ -19,6 +19,11 @@ const (
 	mapLookupAndDeleteUnsupported
 )
 
+// Connected UDP recovery is intentionally bounded: it is a cold-path scan
+// over a token map and must not stall the packet path indefinitely on a device
+// with a large configured map.
+const maxConnectedUDPTokenScan = 4096
+
 func (b *CgroupBackend) LookupOriginal(protocol uint8, listenerDestination netip.AddrPort) (OriginalDestination, error) {
 	return b.lookupOriginal(protocol, listenerDestination, false)
 }
@@ -262,7 +267,7 @@ func (b *CgroupBackend) findConnectedUDPToken(
 	// per token on kernels that implement BPF_MAP_LOOKUP_BATCH, while the
 	// support state keeps vendor/old kernels on the proven iterator path.
 	if b.connectedUDPTokenLookupSupport.mode.Load() != mapBatchUnsupported {
-		batchCapacity := min(uint32(mapBatchMaxEntries), b.mapCapacity.UDPRedirect)
+		batchCapacity := min(uint32(mapBatchMaxEntries), uint32(maxConnectedUDPTokenScan))
 		if cap(b.connectedUDPTokenKeys) < int(batchCapacity) {
 			b.connectedUDPTokenKeys = make([]uint64, batchCapacity)
 			b.connectedUDPTokenValues = make([]listenerLookupKey, batchCapacity)
@@ -272,8 +277,8 @@ func (b *CgroupBackend) findConnectedUDPToken(
 		}
 		var cursor CiliumEBPF.MapBatchCursor
 		var scanned uint32
-		for scanned < b.mapCapacity.UDPRedirect {
-			batchSize := min(batchCapacity, b.mapCapacity.UDPRedirect-scanned)
+		for scanned < maxConnectedUDPTokenScan {
+			batchSize := min(batchCapacity, uint32(maxConnectedUDPTokenScan)-scanned)
 			countValue, batchErr := tokenMap.BatchLookup(
 				&cursor,
 				b.connectedUDPTokenKeys[:batchSize],
@@ -319,7 +324,7 @@ func (b *CgroupBackend) findConnectedUDPToken(
 		if currentToken == listener {
 			return cookie, nil
 		}
-		if scanned >= b.mapCapacity.UDPRedirect {
+		if scanned >= maxConnectedUDPTokenScan {
 			break
 		}
 	}

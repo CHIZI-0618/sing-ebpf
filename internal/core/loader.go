@@ -36,6 +36,19 @@ func attachProgramRaw(target int, program *CiliumEBPF.Program, attachType Cilium
 	return err
 }
 
+// attachProgramRawMultiOnly is used for optional capability probes. Probes
+// must never fall back to the unflagged legacy operation because that variant
+// replaces an existing exclusive cgroup owner. A denied multi attach simply
+// means that the optional capability is unavailable.
+func attachProgramRawMultiOnly(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
+	return rawAttachProgram(link.RawAttachProgramOptions{
+		Target:  target,
+		Program: program,
+		Attach:  attachType,
+		Flags:   unix.BPF_F_ALLOW_MULTI,
+	})
+}
+
 // attachProgramRawWithMode reports the legacy attach variant that actually
 // succeeded. The distinction is operationally important on Android: a
 // vendor kernel can reject BPF_F_ALLOW_MULTI while still accepting the

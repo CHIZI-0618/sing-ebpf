@@ -61,6 +61,25 @@ func TestTCDiagnosticsReportsEffectiveAttachmentState(t *testing.T) {
 	}
 }
 
+func TestRetiredTCCleanupQueuesAreBounded(t *testing.T) {
+	runtime := &tcDataPlane{}
+	for index := 0; index < maxRetiredTCResources*4; index++ {
+		runtime.retainRetiredAttachment(&tcInterfaceAttachment{
+			lock:      &retryCloser{},
+			lockOwned: true,
+		})
+		runtime.retainRetiredDelivery(&tcDeliveryLink{
+			sysctls: []tcSysctlState{{path: "test"}},
+		})
+	}
+	if len(runtime.retiredAttachments) != maxRetiredTCResources {
+		t.Fatalf("retired attachment queue length = %d, want %d", len(runtime.retiredAttachments), maxRetiredTCResources)
+	}
+	if len(runtime.retiredDeliveries) != maxRetiredTCResources {
+		t.Fatalf("retired delivery queue length = %d, want %d", len(runtime.retiredDeliveries), maxRetiredTCResources)
+	}
+}
+
 func TestDesiredTCAttachmentState(t *testing.T) {
 	links := map[string]int{"wlan2": 12, "rndis0": 27}
 	interfaces, err := desiredTCAttachmentState("wlan2", []string{"wlan2", "missing0", "rndis0"}, func(name string) (netlink.Link, error) {

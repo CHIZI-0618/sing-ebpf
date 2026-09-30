@@ -131,9 +131,8 @@ func TestSharedNetworkUDPTimeoutSeconds(t *testing.T) {
 		timeout time.Duration
 		seconds uint32
 	}{
-		{time.Nanosecond, 1},
-		{time.Second, 1},
-		{1500 * time.Millisecond, 2},
+		{5 * time.Second, 5},
+		{6 * time.Second, 6},
 		{5 * time.Minute, 300},
 	} {
 		seconds, err := sharedNetworkUDPTimeoutSeconds(test.timeout)
@@ -151,7 +150,7 @@ func TestSharedNetworkUDPTimeoutSeconds(t *testing.T) {
 			t.Fatalf("unexpected cgroup timeout conversion for %s: %d", test.timeout, cgroupSeconds)
 		}
 	}
-	for _, timeout := range []time.Duration{0, -time.Second, time.Duration(1<<63 - 1)} {
+	for _, timeout := range []time.Duration{0, time.Nanosecond, time.Second, 4 * time.Second, -time.Second, time.Duration(1<<63 - 1)} {
 		if _, err := sharedNetworkUDPTimeoutSeconds(timeout); err == nil {
 			t.Fatalf("expected timeout %s to be rejected", timeout)
 		}

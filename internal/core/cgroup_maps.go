@@ -206,7 +206,7 @@ func probeSocketReleaseSupport(cgroupFD int) (bool, error) {
 		}
 		return false, err
 	}
-	if err = attachProgramRaw(cgroupFD, program, CiliumEBPF.AttachCgroupInetSockRelease); err != nil {
+	if err = attachProgramRawMultiOnly(cgroupFD, program, CiliumEBPF.AttachCgroupInetSockRelease); err != nil {
 		closeErr := program.Close()
 		if socketReleaseAttachUnavailable(err) {
 			return false, closeErr

@@ -17,6 +17,18 @@ func (c *sharedCountingCloser) Close() error {
 	return nil
 }
 
+func TestSharedRewriteRetiredCleanupQueueIsBounded(t *testing.T) {
+	runtime := &sharedRewriteDataPlane{}
+	for index := 0; index < maxRetiredSharedRewriteAttachments*4; index++ {
+		runtime.retainRetiredAttachment(&sharedRewriteAttachment{
+			lock: &sharedCountingCloser{},
+		})
+	}
+	if len(runtime.retiredAttachments) != maxRetiredSharedRewriteAttachments {
+		t.Fatalf("retired shared attachment queue length = %d, want %d", len(runtime.retiredAttachments), maxRetiredSharedRewriteAttachments)
+	}
+}
+
 func TestSharedRewritePurgeCallbackCanReenterRuntime(t *testing.T) {
 	var dataPlane *sharedRewriteDataPlane
 	var callbackErr error

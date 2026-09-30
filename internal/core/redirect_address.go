@@ -13,6 +13,8 @@ import (
 
 const userspaceReplyTokenAttempts = 32
 
+const minEBPFUDPTimeout = 5 * time.Second
+
 func userspaceReplyToken(prefix netip.Prefix, sequence uint64) (netip.Addr, bool) {
 	prefix = prefix.Masked()
 	if !prefix.IsValid() || sequence == 0 {
@@ -63,7 +65,7 @@ func ValidateRedirectPrefix(prefix netip.Prefix) error {
 }
 
 func cgroupUDPTimeoutSeconds(timeout time.Duration) (uint32, error) {
-	if timeout <= 0 {
+	if timeout < minEBPFUDPTimeout {
 		return 0, E.New("invalid local cgroup UDP timeout: ", timeout)
 	}
 	seconds := uint64(timeout / time.Second)

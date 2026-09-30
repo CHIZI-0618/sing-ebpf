@@ -54,7 +54,7 @@ type sharedPacketRewriteControl struct {
 }
 
 func sharedNetworkUDPTimeoutSeconds(timeout time.Duration) (uint32, error) {
-	if timeout <= 0 {
+	if timeout < minEBPFUDPTimeout {
 		return 0, E.New("invalid shared packet-rewrite UDP timeout: ", timeout)
 	}
 	seconds := uint64(timeout / time.Second)

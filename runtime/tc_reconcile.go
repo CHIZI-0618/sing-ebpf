@@ -88,7 +88,7 @@ func (d *tcDataPlane) reconcile(localInterface string, sharedInterfaces []string
 		for _, createdAttachment := range slices.Backward(created) {
 			rollbackErr = E.Errors(rollbackErr, createdAttachment.Close())
 			if !createdAttachment.IsClosed() {
-				d.retiredAttachments = append(d.retiredAttachments, createdAttachment)
+				d.retainRetiredAttachment(createdAttachment)
 			}
 		}
 		if hostChanged {
@@ -172,7 +172,7 @@ func (d *tcDataPlane) reconcile(localInterface string, sharedInterfaces []string
 		// taken out of this map by the attach pass, so this is a safety net.
 		closeErr = E.Errors(closeErr, previous.Close())
 		if !previous.IsClosed() {
-			d.retiredAttachments = append(d.retiredAttachments, previous)
+			d.retainRetiredAttachment(previous)
 		}
 	}
 	d.attachments = attachments
@@ -541,7 +541,7 @@ func (d *tcDataPlane) repairInfrastructure() (bool, error) {
 	delivery, err := d.createTCDeliveryLink()
 	if err != nil {
 		if delivery != nil {
-			d.retiredDeliveries = append(d.retiredDeliveries, delivery)
+			d.retainRetiredDelivery(delivery)
 		}
 		return routingChanged || deliveryChanged, E.Errors(
 			routingErr,
@@ -553,7 +553,7 @@ func (d *tcDataPlane) repairInfrastructure() (bool, error) {
 	d.delivery = delivery
 	if err = previousDelivery.Close(); err != nil {
 		if !previousDelivery.IsClosed() {
-			d.retiredDeliveries = append(d.retiredDeliveries, previousDelivery)
+			d.retainRetiredDelivery(previousDelivery)
 		}
 		return true, E.Errors(routingErr, E.Cause(err, "remove stale TC eBPF delivery link"))
 	}

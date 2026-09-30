@@ -50,6 +50,18 @@ type sharedRewriteDataPlane struct {
 	closed             bool
 }
 
+const maxRetiredSharedRewriteAttachments = 16
+
+func (d *sharedRewriteDataPlane) retainRetiredAttachment(attachment *sharedRewriteAttachment) {
+	if d == nil || attachment == nil || attachment.IsClosed() {
+		return
+	}
+	if len(d.retiredAttachments) >= maxRetiredSharedRewriteAttachments {
+		d.retiredAttachments = append(d.retiredAttachments[:0], d.retiredAttachments[1:]...)
+	}
+	d.retiredAttachments = append(d.retiredAttachments, attachment)
+}
+
 type sharedRewriteCallbackKind uint8
 
 const (
@@ -229,7 +241,7 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 		for _, attachment := range slices.Backward(created) {
 			cause = E.Errors(cause, attachment.Close())
 			if !attachment.IsClosed() {
-				d.retiredAttachments = append(d.retiredAttachments, attachment)
+				d.retainRetiredAttachment(attachment)
 			}
 		}
 		if hostChanged {
@@ -325,7 +337,7 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 					replacement.lock = lock
 				}
 				if !previous.IsClosed() {
-					d.retiredAttachments = append(d.retiredAttachments, previous)
+					d.retainRetiredAttachment(previous)
 				}
 				continue
 			}
@@ -337,7 +349,7 @@ func (d *sharedRewriteDataPlane) reconcile(interfaceNames []string, hostAddresse
 				closeErr = E.Errors(closeErr, E.Cause(err, "detach shared packet-rewrite interface ", previous.interfaceName))
 				changed = true
 				if !previous.IsClosed() {
-					d.retiredAttachments = append(d.retiredAttachments, previous)
+					d.retainRetiredAttachment(previous)
 				}
 			}
 		}
