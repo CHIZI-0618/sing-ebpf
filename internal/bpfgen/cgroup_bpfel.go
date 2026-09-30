@@ -32,6 +32,7 @@ const (
 	CgroupMapCgroupUdpReleaseStats       = "cgroup_udp_release_stats"
 	CgroupMapCgroupUdpReleaseWatch       = "cgroup_udp_release_watch"
 	CgroupMapCgroupUdpToken              = "cgroup_udp_token"
+	CgroupMapCgroupUdpTokenReverse       = "cgroup_udp_token_reverse"
 	CgroupMapCgroupUidPolicy             = "cgroup_uid_policy"
 	CgroupProgSbEbpfConn4Cookie          = "sb_ebpf_conn4_cookie"
 	CgroupProgSbEbpfConn4CookieTcp       = "sb_ebpf_conn4_cookie_tcp"
@@ -133,6 +134,7 @@ type CgroupMapSpecs struct {
 	CgroupUdpReleaseStats  *ebpf.MapSpec `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.MapSpec `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpToken         *ebpf.MapSpec `ebpf:"cgroup_udp_token"`
+	CgroupUdpTokenReverse  *ebpf.MapSpec `ebpf:"cgroup_udp_token_reverse"`
 	CgroupUidPolicy        *ebpf.MapSpec `ebpf:"cgroup_uid_policy"`
 }
 
@@ -178,6 +180,7 @@ type CgroupMaps struct {
 	CgroupUdpReleaseStats  *ebpf.Map `ebpf:"cgroup_udp_release_stats"`
 	CgroupUdpReleaseWatch  *ebpf.Map `ebpf:"cgroup_udp_release_watch"`
 	CgroupUdpToken         *ebpf.Map `ebpf:"cgroup_udp_token"`
+	CgroupUdpTokenReverse  *ebpf.Map `ebpf:"cgroup_udp_token_reverse"`
 	CgroupUidPolicy        *ebpf.Map `ebpf:"cgroup_uid_policy"`
 }
 
@@ -199,6 +202,7 @@ func (m *CgroupMaps) Close() error {
 		m.CgroupUdpReleaseStats,
 		m.CgroupUdpReleaseWatch,
 		m.CgroupUdpToken,
+		m.CgroupUdpTokenReverse,
 		m.CgroupUidPolicy,
 	)
 }

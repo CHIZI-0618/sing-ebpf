@@ -23,6 +23,12 @@ func TestCgroupNetworkGenerationABI(t *testing.T) {
 	if offset := unsafe.Offsetof(udpFlowValue{}.NetworkGeneration); offset != 28 {
 		t.Fatalf("unexpected UDP flow network generation offset: %d", offset)
 	}
+	if size := unsafe.Sizeof(udpTokenReverseValue{}); size != 16 {
+		t.Fatalf("unexpected UDP token reverse value size: %d", size)
+	}
+	if offset := unsafe.Offsetof(udpTokenReverseValue{}.NetworkGeneration); offset != 8 {
+		t.Fatalf("unexpected UDP token reverse generation offset: %d", offset)
+	}
 }
 
 func TestCgroupUDPMapConfigurationKeepsFlowCacheWithoutSocketRelease(t *testing.T) {

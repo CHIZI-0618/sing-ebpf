@@ -9,7 +9,6 @@ import (
 
 	E "github.com/sagernet/sing/common/exceptions"
 
-	CiliumEBPF "github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -18,11 +17,6 @@ const (
 	mapLookupAndDeleteSupported
 	mapLookupAndDeleteUnsupported
 )
-
-// Connected UDP recovery is intentionally bounded: it is a cold-path scan
-// over a token map and must not stall the packet path indefinitely on a device
-// with a large configured map.
-const maxConnectedUDPTokenScan = 4096
 
 func (b *CgroupBackend) LookupOriginal(protocol uint8, listenerDestination netip.AddrPort) (OriginalDestination, error) {
 	return b.lookupOriginal(protocol, listenerDestination, false)
@@ -182,16 +176,20 @@ func (b *CgroupBackend) RecoverConnectedUDPOriginal(listenerDestination netip.Ad
 	if b.runtime.socket_release_supported {
 		return OriginalDestination{}, E.Cause(unix.ENOENT, "connected UDP LRU recovery is disabled")
 	}
-	tokenMap := b.runtime.maps["cgroup_udp_token"]
-	if tokenMap == nil {
-		return OriginalDestination{}, E.New("connected UDP token map is unavailable")
+	var reverse udpTokenReverseValue
+	if err = lookupMap(
+		b.runtime.udp_token_reverse_map_fd,
+		unsafe.Pointer(&listener),
+		unsafe.Pointer(&reverse),
+	); err != nil {
+		return OriginalDestination{}, E.Cause(err, "lookup connected UDP token reverse index")
 	}
-	cookie, err := b.findConnectedUDPToken(tokenMap, listener)
-	if err != nil {
-		return OriginalDestination{}, E.Cause(err, "scan connected UDP token state")
-	}
+	cookie := reverse.SocketCookie
 	if cookie == 0 {
-		return OriginalDestination{}, E.Cause(unix.ENOENT, "find connected UDP token state")
+		return OriginalDestination{}, E.Cause(unix.ENOENT, "invalid connected UDP token reverse index")
+	}
+	if reverse.NetworkGeneration != b.networkGeneration {
+		return OriginalDestination{}, E.New("connected UDP token belongs to stale network generation")
 	}
 	var verifiedToken listenerLookupKey
 	if err = lookupMap(
@@ -257,81 +255,6 @@ func (b *CgroupBackend) RecoverConnectedUDPOriginal(listenerDestination netip.Ad
 		return OriginalDestination{}, E.Cause(err, "restore connected UDP redirect state")
 	}
 	return originalDestinationFromValue(original)
-}
-
-func (b *CgroupBackend) findConnectedUDPToken(
-	tokenMap *CiliumEBPF.Map,
-	listener listenerLookupKey,
-) (uint64, error) {
-	// Connected UDP recovery is a cold path. Batch lookup avoids one syscall
-	// per token on kernels that implement BPF_MAP_LOOKUP_BATCH, while the
-	// support state keeps vendor/old kernels on the proven iterator path.
-	if b.connectedUDPTokenLookupSupport.mode.Load() != mapBatchUnsupported {
-		batchCapacity := min(uint32(mapBatchMaxEntries), uint32(maxConnectedUDPTokenScan))
-		if cap(b.connectedUDPTokenKeys) < int(batchCapacity) {
-			b.connectedUDPTokenKeys = make([]uint64, batchCapacity)
-			b.connectedUDPTokenValues = make([]listenerLookupKey, batchCapacity)
-		} else {
-			b.connectedUDPTokenKeys = b.connectedUDPTokenKeys[:batchCapacity]
-			b.connectedUDPTokenValues = b.connectedUDPTokenValues[:batchCapacity]
-		}
-		var cursor CiliumEBPF.MapBatchCursor
-		var scanned uint32
-		for scanned < maxConnectedUDPTokenScan {
-			batchSize := min(batchCapacity, uint32(maxConnectedUDPTokenScan)-scanned)
-			countValue, batchErr := tokenMap.BatchLookup(
-				&cursor,
-				b.connectedUDPTokenKeys[:batchSize],
-				b.connectedUDPTokenValues[:batchSize],
-				nil,
-			)
-			count := uint32(countValue)
-			for index := range count {
-				if b.connectedUDPTokenValues[index] == listener {
-					b.connectedUDPTokenLookupSupport.mode.CompareAndSwap(mapBatchUnknown, mapBatchSupported)
-					return b.connectedUDPTokenKeys[index], nil
-				}
-			}
-			scanned += count
-			if errors.Is(batchErr, CiliumEBPF.ErrKeyNotExist) {
-				b.connectedUDPTokenLookupSupport.mode.CompareAndSwap(mapBatchUnknown, mapBatchSupported)
-				return 0, unix.ENOENT
-			}
-			if batchErr != nil {
-				if !mapBatchUnsupportedError(batchErr) {
-					return 0, batchErr
-				}
-				b.connectedUDPTokenLookupSupport.mode.Store(mapBatchUnsupported)
-				break
-			}
-			if count == 0 {
-				return 0, unix.EIO
-			}
-			b.connectedUDPTokenLookupSupport.mode.CompareAndSwap(mapBatchUnknown, mapBatchSupported)
-		}
-		if b.connectedUDPTokenLookupSupport.mode.Load() == mapBatchSupported {
-			return 0, unix.ENOENT
-		}
-	}
-	var (
-		cookie       uint64
-		currentToken listenerLookupKey
-		scanned      uint32
-	)
-	iterator := tokenMap.Iterate()
-	for iterator.Next(&cookie, &currentToken) {
-		scanned++
-		if currentToken == listener {
-			return cookie, nil
-		}
-		if scanned >= maxConnectedUDPTokenScan {
-			break
-		}
-	}
-	if err := iterator.Err(); err != nil {
-		return 0, err
-	}
-	return 0, unix.ENOENT
 }
 
 func (b *CgroupBackend) ReserveUDPReplyRedirect(

@@ -63,6 +63,12 @@ struct sb_ebpf_listener_key {
     __u8 token_addr[16];
 };
 
+struct sb_ebpf_udp_token_reverse_value {
+    __u64 socket_cookie;
+    __u32 network_generation;
+    __u32 reserved;
+};
+
 struct sb_ebpf_original_dst {
     __u8 family;
     __u8 protocol;
@@ -103,6 +109,7 @@ struct sb_ebpf_udp_flow_value {
 };
 
 _Static_assert(sizeof(struct sb_ebpf_listener_key) == 20U, "unexpected redirect key ABI");
+_Static_assert(sizeof(struct sb_ebpf_udp_token_reverse_value) == 16U, "unexpected UDP token reverse value ABI");
 _Static_assert(sizeof(struct sb_ebpf_original_dst) == 40U, "unexpected original destination ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_original_dst, socket_cookie) == 24U, "unexpected socket cookie ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_original_dst, created_at_ns) == 32U, "unexpected creation time ABI");

@@ -37,6 +37,7 @@ MAP(cgroup_tcp_redirect, struct sb_ebpf_listener_key, struct sb_ebpf_original_ds
 MAP(cgroup_udp_redirect, struct sb_ebpf_listener_key, struct sb_ebpf_original_dst, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_recovery, struct sb_ebpf_listener_key, struct sb_ebpf_original_dst, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_udp_token, __u64, struct sb_ebpf_listener_key, BPF_MAP_TYPE_HASH);
+MAP(cgroup_udp_token_reverse, struct sb_ebpf_listener_key, struct sb_ebpf_udp_token_reverse_value, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_flow, struct sb_ebpf_udp_flow_key, struct sb_ebpf_udp_flow_value, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_socket_bypass, __u64, __u32, BPF_MAP_TYPE_LRU_HASH);
@@ -395,9 +396,34 @@ INLINE void reset_connected_udp(__u64 cookie) {
         struct sb_ebpf_listener_key listener;
         __builtin_memcpy(&listener, current, sizeof(listener));
         map_delete(&cgroup_udp_redirect, &listener);
+        map_delete(&cgroup_udp_token_reverse, &listener);
     }
     map_delete(&cgroup_udp_token, &cookie);
     map_delete(&cgroup_udp_peer, &cookie);
+}
+
+INLINE bool store_connected_udp_token(
+    const struct sb_ebpf_cgroup_control *config,
+    __u64 cookie,
+    const struct sb_ebpf_listener_key *listener) {
+    if (cookie == 0U || listener == 0) return false;
+    struct sb_ebpf_udp_token_reverse_value *previous = map_lookup(&cgroup_udp_token_reverse, listener);
+    if (previous != 0 && previous->socket_cookie != cookie) {
+        __u64 previous_cookie = previous->socket_cookie;
+        map_delete(&cgroup_udp_token, &previous_cookie);
+        map_delete(&cgroup_udp_peer, &previous_cookie);
+    }
+    if (map_update(&cgroup_udp_token, &cookie, listener, 0U) != 0) return false;
+    struct sb_ebpf_udp_token_reverse_value reverse = {
+        .socket_cookie = cookie,
+        .network_generation = config == 0 ? 0U : config->network_generation,
+    };
+    if (map_update(&cgroup_udp_token_reverse, listener, &reverse, 0U) != 0) {
+        map_delete(&cgroup_udp_token, &cookie);
+        map_delete(&cgroup_udp_token_reverse, listener);
+        return false;
+    }
+    return true;
 }
 
 INLINE void store_udp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
@@ -543,7 +569,7 @@ INLINE int handle_v4(
     original_v4(&original, protocol, port, destination, cookie, connected_udp);
     if (!token_v4(config, &listener, &original, destination, protocol, cookie)) return 0;
     if (connected_udp) {
-        if (cookie == 0U || map_update(&cgroup_udp_token, &cookie, &listener, 0U) != 0) {
+        if (!store_connected_udp_token(config, cookie, &listener)) {
             map_delete(&cgroup_udp_redirect, &listener);
             return 0;
         }
@@ -638,7 +664,7 @@ INLINE int handle_v6(
         original_v4(&original, protocol, port, destination, cookie, connected_udp);
         if (!token_v4(config, &listener, &original, destination, protocol, cookie)) return 0;
         if (connected_udp &&
-            (cookie == 0U || map_update(&cgroup_udp_token, &cookie, &listener, 0U) != 0)) {
+            !store_connected_udp_token(config, cookie, &listener)) {
             map_delete(&cgroup_udp_redirect, &listener);
             return 0;
         }
@@ -697,7 +723,7 @@ INLINE int handle_v6(
     original_v6(&original, protocol, port, address, cookie, connected_udp);
     if (!token_v6(config, &listener, &original, address, protocol, cookie)) return 0;
     if (connected_udp &&
-        (cookie == 0U || map_update(&cgroup_udp_token, &cookie, &listener, 0U) != 0)) {
+        !store_connected_udp_token(config, cookie, &listener)) {
         map_delete(&cgroup_udp_redirect, &listener);
         return 0;
     }
@@ -795,6 +821,7 @@ INLINE int release_socket_cookie(__u64 cookie) {
         struct sb_ebpf_original_dst *original = map_lookup(&cgroup_udp_redirect, listener);
         if (original != 0) map_update(&cgroup_udp_recovery, listener, original, 0U);
         map_delete(&cgroup_udp_redirect, listener);
+        map_delete(&cgroup_udp_token_reverse, listener);
         map_delete(&cgroup_udp_token, &cookie);
     }
     map_delete(&cgroup_udp_peer, &(__u64){cookie});

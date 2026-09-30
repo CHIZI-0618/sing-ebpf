@@ -169,6 +169,12 @@ type listenerLookupKey struct {
 	TokenAddr    [16]byte
 }
 
+type udpTokenReverseValue struct {
+	SocketCookie      uint64
+	NetworkGeneration uint32
+	Reserved          uint32
+}
+
 type originalDestinationValue struct {
 	Family       uint8
 	Protocol     uint8
