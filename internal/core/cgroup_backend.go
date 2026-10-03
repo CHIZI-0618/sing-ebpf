@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -253,6 +254,8 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		dnsMode:              policy.localDNSMode,
 		bypassPrivateAddress: false,
 		udpTimeoutSeconds:    udpTimeoutSeconds,
+		bypassIPv4CIDR:       slices.Clone(policy.localInitialBypass.ipv4),
+		bypassIPv6CIDR:       slices.Clone(policy.localInitialBypass.ipv6),
 	}
 	if err = populateCompiledPolicyMaps(policyMapTargets{
 		Scope:           "cgroup eBPF",

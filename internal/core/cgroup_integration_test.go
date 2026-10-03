@@ -75,6 +75,58 @@ func TestCgroupProgramMatrixIntegration(t *testing.T) {
 	}
 }
 
+func TestCgroupInitialBypassCIDRCountTracksLoadedPolicy(t *testing.T) {
+	requireEBPFIntegration(t, "test cgroup initial bypass CIDR state")
+	cgroupRoot, err := DetectCgroup2Root()
+	if err != nil {
+		t.Skipf("cgroup v2 is unavailable: %v", err)
+	}
+	path, _ := createIntegrationCgroup(t, cgroupRoot, 150)
+	selfBypassMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
+		Type:       CiliumEBPF.LRUHash,
+		KeySize:    8,
+		ValueSize:  4,
+		MaxEntries: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer selfBypassMap.Close()
+	policy, err := CompileActionPolicy(ActionPolicy{
+		EnableTCP: true,
+		Local: ActionScope{
+			Default: DecisionIntercept,
+			DestinationCIDR: []CIDRDecision{
+				{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Action: DecisionPass},
+				{Prefix: netip.MustParsePrefix("2001:db8::/32"), Action: DecisionPass},
+			},
+		},
+		Shared: ActionScope{Default: DecisionIntercept},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := PrepareCgroup(CgroupConfig{
+		Path:          path,
+		EnableTCP:     true,
+		RedirectIPv4:  netip.MustParsePrefix("127.128.0.0/9"),
+		MapCapacity:   CgroupMapCapacity{TCPRedirect: 64, UDPRedirect: 64, UDPPeer: 64, UDPFlow: 64, SocketBypass: 8},
+		UDPTimeout:    time.Minute,
+		Policy:        policy,
+		SelfBypassMap: selfBypassMap,
+	})
+	if err != nil {
+		if cgroupIntegrationUnavailable(err) {
+			t.Skipf("cgroup eBPF is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	if ipv4, ipv6 := backend.BypassCIDRCount(); ipv4 != 1 || ipv6 != 1 {
+		t.Fatalf("initial bypass CIDR count = %d/%d, want 1/1", ipv4, ipv6)
+	}
+}
+
 // TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass exercises the real
 // sendmsg4 hook. It first verifies an uncached direct socket, then plants a
 // proxy action for a second socket's exact cookie/five-tuple and verifies that
