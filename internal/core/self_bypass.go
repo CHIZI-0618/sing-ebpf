@@ -46,6 +46,11 @@ const (
 	SelfBypassUserspace SelfBypassMode = iota
 	SelfBypassCgroupSocket
 	SelfBypassCgroupSocketAddr
+	// SelfBypassUserspaceRelease keeps userspace socket registration while
+	// using a cgroup sock_release hook for lifecycle cleanup. This is useful
+	// when socket-create/connect hooks are unavailable, including TC-only
+	// deployments where the cgroup data plane is not loaded.
+	SelfBypassUserspaceRelease
 )
 
 func (m SelfBypassMode) String() string {
@@ -54,8 +59,21 @@ func (m SelfBypassMode) String() string {
 		return "cgroup_socket_cookie"
 	case SelfBypassCgroupSocketAddr:
 		return "cgroup_socket_addr"
+	case SelfBypassUserspaceRelease:
+		return "userspace_socket_cookie_release"
 	default:
 		return "userspace_socket_cookie"
+	}
+}
+
+// CleanupMode reports how entries in the self-bypass map are removed.
+// lru_fallback is a safety net, not a precise socket lifecycle mechanism.
+func (m SelfBypassMode) CleanupMode() string {
+	switch m {
+	case SelfBypassCgroupSocket, SelfBypassUserspaceRelease:
+		return "socket_release"
+	default:
+		return "lru_fallback"
 	}
 }
 
@@ -95,6 +113,8 @@ func (b *SelfBypass) Map() *CiliumEBPF.Map {
 // AttachCgroup enables automatic socket-cookie registration when the current
 // cgroup is exclusive to this process. It first tries socket create/release
 // hooks, then connect/sendmsg hooks for kernels that expose only the latter.
+// When those hooks cannot be used, it still attempts a release-only hook so
+// userspace registration does not leave entries behind on pure TC systems.
 // A failure leaves the map usable by the userspace registration fallback.
 func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if b == nil {
@@ -117,31 +137,51 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if err != nil {
 		return E.Cause(err, "detect process cgroup v2")
 	}
-	exclusive, err := processCgroupExclusive(cgroupPath)
-	if err != nil {
-		return err
+	exclusive, exclusiveErr := processCgroupExclusive(cgroupPath)
+	var attachErrors []error
+	if exclusiveErr != nil {
+		attachErrors = append(attachErrors, exclusiveErr)
 	}
-	if !exclusive {
-		return E.New("process cgroup contains other processes")
+	if exclusive {
+		createReleaseErr := b.attachCgroupSocket(cgroupPath)
+		if createReleaseErr == nil {
+			b.mode.Store(uint32(SelfBypassCgroupSocket))
+			return nil
+		}
+		attachErrors = append(attachErrors, createReleaseErr)
+		if lenOpenCgroupProgramLinks(b.links) > 0 {
+			return E.Errors(attachErrors...)
+		}
+		socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config)
+		if socketAddrErr == nil {
+			b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
+			return nil
+		}
+		attachErrors = append(attachErrors, socketAddrErr)
+		if lenOpenCgroupProgramLinks(b.links) > 0 {
+			return E.Errors(attachErrors...)
+		}
+	} else if exclusiveErr == nil {
+		attachErrors = append(attachErrors, E.New("process cgroup contains other processes"))
 	}
-	createReleaseErr := b.attachCgroupSocket(cgroupPath)
-	if createReleaseErr == nil {
-		b.mode.Store(uint32(SelfBypassCgroupSocket))
+
+	// A release-only hook is safe on a shared cgroup: it only deletes entries
+	// whose cookies are already present in our map, and never marks sockets.
+	if releaseErr := b.attachCgroupRelease(cgroupPath); releaseErr == nil {
+		b.mode.Store(uint32(SelfBypassUserspaceRelease))
 		return nil
+	} else {
+		attachErrors = append(attachErrors, releaseErr)
 	}
-	if lenOpenCgroupProgramLinks(b.links) > 0 {
-		return createReleaseErr
-	}
-	socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config)
-	if socketAddrErr == nil {
-		b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
-		return nil
-	}
-	return E.Errors(createReleaseErr, socketAddrErr)
+	return E.Errors(attachErrors...)
 }
 
 func (b *SelfBypass) CgroupAttached() bool {
-	return b != nil && b.mode.Load() != uint32(SelfBypassUserspace)
+	if b == nil {
+		return false
+	}
+	mode := SelfBypassMode(b.mode.Load())
+	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddr
 }
 
 func (b *SelfBypass) Mode() SelfBypassMode {
@@ -179,6 +219,21 @@ func (b *SelfBypass) attachCgroupSocket(path string) error {
 	}
 	b.programs = []*CiliumEBPF.Program{createProgram, releaseProgram}
 	b.links = []cgroupProgramLink{createLink, releaseLink}
+	return nil
+}
+
+func (b *SelfBypass) attachCgroupRelease(path string) error {
+	program, err := newSelfBypassReleaseProgram(b.sockets.FD())
+	if err != nil {
+		return err
+	}
+	programLink, err := attachCgroupProgram(path, program, CiliumEBPF.AttachCgroupInetSockRelease)
+	if err != nil {
+		_ = program.Close()
+		return E.Cause(err, "attach eBPF self-bypass socket-release cleanup hook")
+	}
+	b.programs = []*CiliumEBPF.Program{program}
+	b.links = []cgroupProgramLink{programLink}
 	return nil
 }
 
@@ -339,15 +394,16 @@ func selfBypassSocketAddrInstructions(mapFD int) asm.Instructions {
 	}
 }
 
-// RegisterSocket records a socket created by the consumer when cgroup hooks cannot
-// be attached. It performs one SO_COOKIE read and one map update per socket.
+// RegisterSocket records a socket created by the consumer when cgroup hooks
+// cannot mark it automatically. It performs one SO_COOKIE read and one map
+// update per socket.
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 	if b == nil {
 		return nil
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
-	if b.sockets == nil || b.CgroupAttached() {
+	if b.sockets == nil {
 		return nil
 	}
 	var cookie uint64
@@ -365,6 +421,37 @@ func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 	value := uint32(1)
 	if err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny); err != nil {
 		return E.Cause(err, "register eBPF self-bypass socket")
+	}
+	return nil
+}
+
+// UnregisterSocket removes a socket previously registered by RegisterSocket.
+// Call it before closing the socket when no kernel release hook is active.
+// The cookie is read from the supplied live socket, so deletion cannot target
+// a different socket that reused an old descriptor.
+func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
+	if b == nil {
+		return nil
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.sockets == nil || b.CgroupAttached() {
+		return nil
+	}
+	var cookie uint64
+	err := control.Raw(rawConn, func(fd uintptr) error {
+		var err error
+		cookie, err = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
+		return err
+	})
+	if err != nil {
+		return E.Cause(err, "read socket cookie for eBPF self-bypass unregister")
+	}
+	if cookie == 0 {
+		return nil
+	}
+	if err = b.sockets.Delete(&cookie); err != nil {
+		return E.Cause(err, "unregister eBPF self-bypass socket")
 	}
 	return nil
 }

@@ -91,6 +91,7 @@ const (
 	SelfBypassUserspace        = core.SelfBypassUserspace
 	SelfBypassCgroupSocket     = core.SelfBypassCgroupSocket
 	SelfBypassCgroupSocketAddr = core.SelfBypassCgroupSocketAddr
+	SelfBypassUserspaceRelease = core.SelfBypassUserspaceRelease
 
 	KernelProbeModeAll    = core.KernelProbeModeAll
 	KernelProbeModeLocal  = core.KernelProbeModeLocal
@@ -145,11 +146,25 @@ func (b *SelfBypass) Mode() SelfBypassMode {
 	return core.UnwrapSelfBypass(b).Mode()
 }
 
+func (b *SelfBypass) CleanupMode() string {
+	if b == nil {
+		return SelfBypassUserspace.CleanupMode()
+	}
+	return core.UnwrapSelfBypass(b).Mode().CleanupMode()
+}
+
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 	if b == nil {
 		return core.UnwrapSelfBypass(nil).RegisterSocket(rawConn)
 	}
 	return core.UnwrapSelfBypass(b).RegisterSocket(rawConn)
+}
+
+func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
+	if b == nil {
+		return nil
+	}
+	return core.UnwrapSelfBypass(b).UnregisterSocket(rawConn)
 }
 
 func (b *SelfBypass) IsClosed() bool {
