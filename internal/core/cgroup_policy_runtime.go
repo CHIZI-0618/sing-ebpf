@@ -39,10 +39,11 @@ func (b *CgroupBackend) updateDestinationCIDRPolicy(policy dualStackCIDRPrefixes
 	if err := b.health.requireUsable(b.runtime != nil); err != nil {
 		return false, err
 	}
+	previousIPv4, previousIPv6 := b.bypassIPv4CIDR, b.bypassIPv6CIDR
 	changed, err := replaceDualStackCIDRPolicy(
 		b.runtime.maps["cgroup_bypass_ipv4"],
 		b.runtime.maps["cgroup_bypass_ipv6"],
-		dualStackCIDRPrefixes{b.bypassIPv4CIDR, b.bypassIPv6CIDR},
+		dualStackCIDRPrefixes{previousIPv4, previousIPv6},
 		dualStackCIDRPrefixes{policy.ipv4, policy.ipv6},
 		"eBPF cgroup ", "bypass CIDR",
 	)
@@ -52,8 +53,37 @@ func (b *CgroupBackend) updateDestinationCIDRPolicy(policy dualStackCIDRPrefixes
 		}
 		return false, err
 	}
+	// The cgroup program consults the destination-CIDR bypass map only when
+	// the corresponding BypassIPv4/BypassIPv6 control flag is set. Those flags
+	// were derived once, at prepare time, from the static pass policy (the
+	// initial bypass set). A later UpdateDestinationDecisions call changes the
+	// map but left the flags behind, so destinations added dynamically (for
+	// example a rule-set refresh) were written to the map yet never consulted.
+	// Recompute the flags from the new policy and refresh the control block,
+	// matching TCBackend.updateDestinationCIDRPolicy.
+	previousIPv4Flag, previousIPv6Flag := b.runtime.bypass_ipv4_policy, b.runtime.bypass_ipv6_policy
 	b.bypassIPv4CIDR = slices.Clone(policy.ipv4)
 	b.bypassIPv6CIDR = slices.Clone(policy.ipv6)
+	b.runtime.bypass_ipv4_policy = len(policy.ipv4) > 0
+	b.runtime.bypass_ipv6_policy = len(policy.ipv6) > 0
+	if err = b.updateCgroupControl(b.listenerPort); err != nil {
+		// The map is already live while the flags that gate it are not, and
+		// the program reads the flag before the map, so leaving this half
+		// applied changes what the data plane matches. Put both back.
+		_, restoreErr := replaceDualStackCIDRPolicy(
+			b.runtime.maps["cgroup_bypass_ipv4"],
+			b.runtime.maps["cgroup_bypass_ipv6"],
+			dualStackCIDRPrefixes{policy.ipv4, policy.ipv6},
+			dualStackCIDRPrefixes{previousIPv4, previousIPv6},
+			"eBPF cgroup ", "bypass CIDR",
+		)
+		if restoreErr != nil {
+			return false, E.Errors(err, restoreErr, b.health.invalidate("cgroup", "bypass CIDR policy"))
+		}
+		b.bypassIPv4CIDR, b.bypassIPv6CIDR = previousIPv4, previousIPv6
+		b.runtime.bypass_ipv4_policy, b.runtime.bypass_ipv6_policy = previousIPv4Flag, previousIPv6Flag
+		return false, err
+	}
 	return changed, nil
 }
 
