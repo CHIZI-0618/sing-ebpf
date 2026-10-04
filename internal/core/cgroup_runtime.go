@@ -5,11 +5,25 @@ package core
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"os"
+
+	E "github.com/sagernet/sing/common/exceptions"
 
 	"github.com/cilium/ebpf/ringbuf"
 	"golang.org/x/sys/unix"
 )
+
+// UDPReleaseEvent identifies the recovery entry created when a UDP socket was
+// released. It is emitted only by the optional socket-release ring buffer.
+// The timestamp uses the same monotonic clock as recovery values and is used
+// for ABA-safe delayed cleanup.
+type UDPReleaseEvent struct {
+	SocketCookie      uint64
+	Listener          netip.AddrPort
+	NetworkGeneration uint32
+	ReleasedAtNS      uint64
+}
 
 const (
 	cgroupUDPReleaseRingSize            = 64 * 1024
@@ -30,17 +44,19 @@ type UDPStateDiagnostics struct {
 	CleanupMode          string `json:"cleanup_mode"`
 	UserspaceCleanupMode string `json:"userspace_cleanup_mode"`
 	RecoveryMode         string `json:"recovery_mode"`
+	RecoveryConsumeMode  string `json:"recovery_consume_mode"`
 	SocketRelease        bool   `json:"socket_release"`
 	NetworkGeneration    uint32 `json:"network_generation"`
 	MapPressure          string `json:"map_pressure"`
 }
 
 func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
-	result := UDPStateDiagnostics{State: cgroupUDPStateFull, RecoveryMode: "reverse_index"}
+	result := UDPStateDiagnostics{State: cgroupUDPStateFull, RecoveryMode: "reverse_index", RecoveryConsumeMode: "unknown"}
 	if b == nil {
 		result.State = cgroupUDPStateRecoveryDegraded
 		return result
 	}
+	result.RecoveryConsumeMode = b.udpRecoveryConsumeModeString()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || !b.runtime.enable_udp {
@@ -63,6 +79,17 @@ func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
 		result.State = cgroupUDPStateTimeoutFallback
 	}
 	return result
+}
+
+func (b *CgroupBackend) udpRecoveryConsumeModeString() string {
+	switch b.udpRecoveryConsumeMode.Load() {
+	case mapLookupAndDeleteSupported:
+		return "lookup_and_delete"
+	case mapLookupAndDeleteUnsupported:
+		return "lookup_only"
+	default:
+		return "unknown"
+	}
 }
 
 func cgroupUDPUserspaceCleanupModeLocked(runtimeState *cgroupRuntime) string {
@@ -195,19 +222,19 @@ func (b *CgroupBackend) UDPReleaseNotificationDrops() (uint64, error) {
 	return total, nil
 }
 
-// ReadUDPRelease blocks until the cgroup socket-release hook reports a socket
-// cookie that entered the local UDP data path. The notification is optional:
+// ReadUDPRelease blocks until the cgroup socket-release hook reports a UDP
+// recovery entry. The notification is optional:
 // callers must retain their normal UDP deadline for unsupported kernels and
 // ring-buffer overflow.
-func (b *CgroupBackend) ReadUDPRelease() (uint64, error) {
+func (b *CgroupBackend) ReadUDPRelease() (UDPReleaseEvent, error) {
 	if b == nil {
-		return 0, unix.EOPNOTSUPP
+		return UDPReleaseEvent{}, unix.EOPNOTSUPP
 	}
 	b.access.RLock()
 	runtimeState := b.runtime
 	if runtimeState == nil || !runtimeState.udp_release_observer || runtimeState.udp_release_reader == nil {
 		b.access.RUnlock()
-		return 0, unix.EOPNOTSUPP
+		return UDPReleaseEvent{}, unix.EOPNOTSUPP
 	}
 	reader := runtimeState.udp_release_reader
 	b.access.RUnlock()
@@ -216,15 +243,32 @@ func (b *CgroupBackend) ReadUDPRelease() (uint64, error) {
 	defer b.udpReleaseReadAccess.Unlock()
 	if err := reader.ReadInto(&runtimeState.udp_release_record); err != nil {
 		if errors.Is(err, ringbuf.ErrClosed) {
-			return 0, os.ErrClosed
+			return UDPReleaseEvent{}, os.ErrClosed
 		}
-		return 0, err
+		return UDPReleaseEvent{}, err
 	}
 	sample := runtimeState.udp_release_record.RawSample
-	if len(sample) != 8 {
-		return 0, unix.EPROTO
+	if len(sample) != 40 {
+		return UDPReleaseEvent{}, unix.EPROTO
 	}
-	return binary.NativeEndian.Uint64(sample), nil
+	var key listenerLookupKey
+	key.Family = sample[8]
+	key.Protocol = sample[9]
+	key.ListenerPort = binary.NativeEndian.Uint16(sample[10:12])
+	copy(key.TokenAddr[:], sample[12:28])
+	if key.Protocol != ProtocolUDP {
+		return UDPReleaseEvent{}, unix.EPROTO
+	}
+	listener, err := listenerDestinationFromKey(key)
+	if err != nil {
+		return UDPReleaseEvent{}, E.Cause(err, "decode UDP release listener")
+	}
+	return UDPReleaseEvent{
+		SocketCookie:      binary.NativeEndian.Uint64(sample[0:8]),
+		Listener:          listener,
+		NetworkGeneration: binary.NativeEndian.Uint32(sample[28:32]),
+		ReleasedAtNS:      binary.NativeEndian.Uint64(sample[32:40]),
+	}, nil
 }
 
 func cgroupUDPCleanupModeLocked(runtimeState *cgroupRuntime) string {

@@ -80,6 +80,13 @@ struct sb_ebpf_original_dst {
     __u64 created_at_ns;
 };
 
+struct sb_ebpf_udp_release_event {
+    __u64 socket_cookie;
+    struct sb_ebpf_listener_key listener;
+    __u32 network_generation;
+    __u64 released_at_ns;
+};
+
 struct sb_ebpf_udp_peer_key {
     __u64 cookie;
 };
@@ -113,6 +120,10 @@ _Static_assert(sizeof(struct sb_ebpf_udp_token_reverse_value) == 16U, "unexpecte
 _Static_assert(sizeof(struct sb_ebpf_original_dst) == 40U, "unexpected original destination ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_original_dst, socket_cookie) == 24U, "unexpected socket cookie ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_original_dst, created_at_ns) == 32U, "unexpected creation time ABI");
+_Static_assert(sizeof(struct sb_ebpf_udp_release_event) == 40U, "unexpected UDP release event ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_udp_release_event, listener) == 8U, "unexpected UDP release listener ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_udp_release_event, network_generation) == 28U, "unexpected UDP release generation ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_udp_release_event, released_at_ns) == 32U, "unexpected UDP release timestamp ABI");
 _Static_assert(sizeof(struct sb_ebpf_udp_peer_key) == 8U, "unexpected UDP peer key ABI");
 _Static_assert(sizeof(struct sb_ebpf_udp_peer_value) == 20U, "unexpected UDP peer value ABI");
 _Static_assert(sizeof(struct sb_ebpf_udp_flow_key) == 32U, "unexpected UDP flow key ABI");

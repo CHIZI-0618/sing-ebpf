@@ -814,12 +814,20 @@ SEC("cgroup/recvmsg4") int sb_ebpf_urcv4_c(struct bpf_sock_addr *ctx) { return r
 SEC("cgroup/recvmsg6") int sb_ebpf_urcv6_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, true); }
 SEC("cgroup/recvmsg6_mapped") int sb_ebpf_urcv6_mapped_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, false); }
 
-INLINE int release_socket_cookie(__u64 cookie) {
+INLINE int release_socket_cookie(__u64 cookie, __u64 released_at_ns) {
     if (cookie == 0U) return 1;
     struct sb_ebpf_listener_key *listener = map_lookup(&cgroup_udp_token, &cookie);
     if (listener != 0) {
         struct sb_ebpf_original_dst *original = map_lookup(&cgroup_udp_redirect, listener);
-        if (original != 0) map_update(&cgroup_udp_recovery, listener, original, 0U);
+        if (original != 0) {
+            struct sb_ebpf_original_dst recovery;
+            __builtin_memcpy(&recovery, original, sizeof(recovery));
+            // UDP redirect values do not otherwise use created_at_ns.  Stamp
+            // recovery entries with monotonic ktime so userspace can reclaim
+            // entries that never receive a late packet.
+            recovery.created_at_ns = released_at_ns != 0U ? released_at_ns : flow_time_ns();
+            map_update(&cgroup_udp_recovery, listener, &recovery, 0U);
+        }
         map_delete(&cgroup_udp_redirect, listener);
         map_delete(&cgroup_udp_token_reverse, listener);
         map_delete(&cgroup_udp_token, &cookie);
@@ -830,7 +838,7 @@ INLINE int release_socket_cookie(__u64 cookie) {
 }
 
 INLINE int release_socket(struct bpf_sock *ctx) {
-    return release_socket_cookie(get_socket_cookie(ctx));
+    return release_socket_cookie(get_socket_cookie(ctx), 0U);
 }
 
 INLINE int release_socket_notify(struct bpf_sock *ctx) {
@@ -839,15 +847,30 @@ INLINE int release_socket_notify(struct bpf_sock *ctx) {
     __u8 *watched = map_lookup(&cgroup_udp_release_watch, &cookie);
     if (watched != 0) {
         map_delete(&cgroup_udp_release_watch, &cookie);
+        struct sb_ebpf_listener_key *listener = map_lookup(&cgroup_udp_token, &cookie);
+        __u64 released_at_ns = flow_time_ns();
         // Notification is best-effort. A full ring only postpones userspace
         // cleanup until the ordinary UDP deadline.
-        if (ringbuf_output(&cgroup_udp_release_events, &cookie, sizeof(cookie), 0U) != 0) {
+        if (listener != 0) {
+            struct sb_ebpf_udp_release_event event = {
+                .socket_cookie = cookie,
+                .network_generation = control() != 0 ? control()->network_generation : 0U,
+                .released_at_ns = released_at_ns,
+            };
+            __builtin_memcpy(&event.listener, listener, sizeof(event.listener));
+            if (ringbuf_output(&cgroup_udp_release_events, &event, sizeof(event), 0U) != 0) {
+                __u32 index = 0U;
+                __u64 *drops = map_lookup(&cgroup_udp_release_stats, &index);
+                if (drops != 0) *drops += 1U;
+            }
+        } else {
             __u32 index = 0U;
             __u64 *drops = map_lookup(&cgroup_udp_release_stats, &index);
             if (drops != 0) *drops += 1U;
         }
+        return release_socket_cookie(cookie, released_at_ns);
     }
-    return release_socket_cookie(cookie);
+    return release_socket_cookie(cookie, 0U);
 }
 
 SEC("cgroup/sock_release_cookie") int sb_ebpf_rel_cookie(struct bpf_sock *ctx) { return release_socket(ctx); }

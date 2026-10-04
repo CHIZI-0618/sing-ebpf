@@ -5,6 +5,7 @@ package core
 import (
 	"errors"
 	"net/netip"
+	"time"
 	"unsafe"
 
 	E "github.com/sagernet/sing/common/exceptions"
@@ -105,7 +106,59 @@ func (b *CgroupBackend) RecoverUDPOriginal(listenerDestination netip.AddrPort) (
 		}
 		original = existing
 	}
+	// created_at_ns is recovery metadata only; do not carry it back into the
+	// live redirect value where callers could mistake it for TCP creation time.
+	original.CreatedAtNS = 0
 	return originalDestinationFromValue(original)
+}
+
+// DeleteUDPRecovery removes one expired recovery entry if it still refers to
+// the socket-release event that scheduled it. The cookie, generation and
+// release timestamp checks prevent a delayed cleanup from deleting a newer
+// entry that reused the same listener token.
+func (b *CgroupBackend) DeleteUDPRecovery(
+	listenerDestination netip.AddrPort,
+	socketCookie uint64,
+	networkGeneration uint32,
+	releasedAtNS uint64,
+) (bool, error) {
+	if b == nil {
+		return false, errBackendClosed
+	}
+	if socketCookie == 0 {
+		return false, unix.EINVAL
+	}
+	key, err := makeListenerLookupKey(ProtocolUDP, listenerDestination)
+	if err != nil {
+		return false, err
+	}
+	b.udpRecoveryAccess.Lock()
+	defer b.udpRecoveryAccess.Unlock()
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil {
+		return false, errBackendClosed
+	}
+	if networkGeneration != 0 && networkGeneration != b.networkGeneration {
+		return false, nil
+	}
+	var current originalDestinationValue
+	if err = lookupMap(b.udpRecoveryMapFD, unsafe.Pointer(&key), unsafe.Pointer(&current)); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, E.Cause(err, "lookup UDP recovery entry for expiry")
+	}
+	if current.SocketCookie != socketCookie || (releasedAtNS != 0 && current.CreatedAtNS != releasedAtNS) {
+		return false, nil
+	}
+	if err = deleteMap(b.udpRecoveryMapFD, unsafe.Pointer(&key)); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, E.Cause(err, "delete expired UDP recovery entry")
+	}
+	return true, nil
 }
 
 func (b *CgroupBackend) takeUDPRecoveryElement(
@@ -363,6 +416,10 @@ func (b *CgroupBackend) DeleteRedirect(protocol uint8, listenerDestination netip
 		var original originalDestinationValue
 		lookupErr := lookupMap(redirectMap, unsafe.Pointer(&key), unsafe.Pointer(&original))
 		if lookupErr == nil {
+			// UDP recovery values are the only users of CreatedAtNS for UDP. The
+			// timestamp lets the control plane reclaim entries that never receive
+			// a late packet instead of relying on LRU eviction.
+			original.CreatedAtNS = monotonicNowNS()
 			if recoveryErr := updateMap(
 				b.udpRecoveryMapFD,
 				unsafe.Pointer(&key),
@@ -389,6 +446,101 @@ func (b *CgroupBackend) DeleteRedirect(protocol uint8, listenerDestination netip
 		return E.Cause(err, "delete redirect mapping")
 	}
 	return nil
+}
+
+type UDPRecoverySweepResult struct {
+	Usage    MapUsage
+	Scanned  uint32
+	Removed  uint32
+	Complete bool
+}
+
+type udpRecoveryEntry struct {
+	key   listenerLookupKey
+	value originalDestinationValue
+}
+
+// SweepUDPRecovery removes recovery entries that have exceeded maxIdle. It is
+// intentionally a bounded control-plane operation; callers should repeat it
+// when Complete is false. The value is rechecked before deletion so a newer
+// entry for the same token is retained.
+func (b *CgroupBackend) SweepUDPRecovery(maxIdle time.Duration, fallbackBudget uint32) (UDPRecoverySweepResult, error) {
+	if b == nil {
+		return UDPRecoverySweepResult{}, errBackendClosed
+	}
+	if maxIdle <= 0 || fallbackBudget == 0 {
+		return UDPRecoverySweepResult{}, unix.EINVAL
+	}
+	b.udpRecoveryAccess.Lock()
+	defer b.udpRecoveryAccess.Unlock()
+	b.access.RLock()
+	defer b.access.RUnlock()
+	if b.runtime == nil || b.runtime.maps["cgroup_udp_recovery"] == nil {
+		return UDPRecoverySweepResult{}, errBackendClosed
+	}
+	now := monotonicNowNS()
+	maxIdleNS := uint64(maxIdle)
+	if now <= maxIdleNS {
+		return UDPRecoverySweepResult{Usage: MapUsage{Capacity: b.recoveryCapacity()}, Complete: true}, nil
+	}
+	staleBefore := now - maxIdleNS
+	b.recoverySweepCandidates = b.recoverySweepCandidates[:0]
+	scan, err := b.recoverySweepScratch.scan(
+		b.runtime.maps["cgroup_udp_recovery"],
+		b.recoveryCapacity(),
+		fallbackBudget,
+		func(key listenerLookupKey, value originalDestinationValue) {
+			if value.CreatedAtNS != 0 && value.CreatedAtNS <= staleBefore {
+				b.recoverySweepCandidates = append(b.recoverySweepCandidates, udpRecoveryEntry{key: key, value: value})
+			}
+		},
+	)
+	if err != nil {
+		return UDPRecoverySweepResult{}, err
+	}
+	result := UDPRecoverySweepResult{Scanned: scan.Scanned, Complete: scan.Complete,
+		Usage: MapUsage{Capacity: b.recoveryCapacity()}}
+	for _, entry := range b.recoverySweepCandidates {
+		var current originalDestinationValue
+		if err = lookupMap(b.udpRecoveryMapFD, unsafe.Pointer(&entry.key), unsafe.Pointer(&current)); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return result, err
+		}
+		if current != entry.value {
+			continue
+		}
+		if err = deleteMap(b.udpRecoveryMapFD, unsafe.Pointer(&entry.key)); err != nil && !errors.Is(err, unix.ENOENT) {
+			return result, err
+		}
+		result.Removed++
+	}
+	if result.Complete {
+		result.Usage.Entries = scan.Entries
+		if result.Removed >= result.Usage.Entries {
+			result.Usage.Entries = 0
+		} else {
+			result.Usage.Entries -= result.Removed
+		}
+	}
+	return result, nil
+}
+
+func (b *CgroupBackend) recoveryCapacity() uint32 {
+	capacity := b.mapCapacity.UDPRedirect
+	if capacity > UDPRecoveryMapCapacity {
+		capacity = UDPRecoveryMapCapacity
+	}
+	return capacity
+}
+
+func monotonicNowNS() uint64 {
+	var now unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &now); err != nil {
+		return 0
+	}
+	return uint64(now.Sec)*uint64(time.Second) + uint64(now.Nsec)
 }
 
 func (b *CgroupBackend) redirectMap(protocol uint8) (int, error) {

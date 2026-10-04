@@ -8,6 +8,8 @@ func (b *CgroupBackend) Close() error {
 	if b == nil {
 		return nil
 	}
+	b.udpRecoveryAccess.Lock()
+	defer b.udpRecoveryAccess.Unlock()
 	b.access.Lock()
 	defer b.access.Unlock()
 	if b.runtime == nil {
@@ -40,6 +42,8 @@ func (b *CgroupBackend) Close() error {
 	b.hostIPv4 = nil
 	b.hostIPv6 = nil
 	b.listenerPort = 0
+	b.recoverySweepScratch = mapScanScratch[listenerLookupKey, originalDestinationValue]{}
+	b.recoverySweepCandidates = nil
 	return closeErr
 }
 

@@ -54,6 +54,8 @@ type (
 	MapOccupancy                   = core.MapOccupancy
 	MapOccupancyReport             = core.MapOccupancyReport
 	UDPStateDiagnostics            = core.UDPStateDiagnostics
+	UDPReleaseEvent                = core.UDPReleaseEvent
+	UDPRecoverySweepResult         = core.UDPRecoverySweepResult
 )
 
 const (

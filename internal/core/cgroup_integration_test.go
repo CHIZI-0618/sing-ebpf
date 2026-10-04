@@ -127,6 +127,50 @@ func TestCgroupInitialBypassCIDRCountTracksLoadedPolicy(t *testing.T) {
 	}
 }
 
+func TestCgroupUDPRecoverySweepRemovesExpiredEntries(t *testing.T) {
+	requireEBPFIntegration(t, "test cgroup UDP recovery sweep")
+	cgroupRoot, err := DetectCgroup2Root()
+	if err != nil {
+		t.Skipf("cgroup v2 is unavailable: %v", err)
+	}
+	path, _ := createIntegrationCgroup(t, cgroupRoot, 151)
+	backend, err := prepareCgroupIntegrationBackend(path, false, true, false)
+	if err != nil {
+		if cgroupIntegrationUnavailable(err) {
+			t.Skipf("cgroup eBPF is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	key, err := makeListenerLookupKey(ProtocolUDP, netip.MustParseAddrPort("127.128.0.7:41000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := originalDestinationValue{
+		Family:       addressFamilyIPv4,
+		Protocol:     ProtocolUDP,
+		Port:         443,
+		SocketCookie: 123,
+		CreatedAtNS:  1,
+	}
+	address := netip.MustParseAddr("192.0.2.7").As4()
+	copy(value.Addr[:4], address[:])
+	if err = updateMap(backend.udpRecoveryMapFD, unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := backend.SweepUDPRecovery(time.Second, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 1 {
+		t.Fatalf("recovery sweep removed %d entries, want 1", result.Removed)
+	}
+	var current originalDestinationValue
+	if err = lookupMap(backend.udpRecoveryMapFD, unsafe.Pointer(&key), unsafe.Pointer(&current)); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("expired recovery entry remained: %v", err)
+	}
+}
+
 // TestCgroupUDPFlowCacheDoesNotOverrideUIDBypass exercises the real
 // sendmsg4 hook. It first verifies an uncached direct socket, then plants a
 // proxy action for a second socket's exact cookie/five-tuple and verifies that

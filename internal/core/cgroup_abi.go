@@ -265,6 +265,22 @@ func makeListenerLookupKey(protocol uint8, listenerDestination netip.AddrPort) (
 	return key, nil
 }
 
+func listenerDestinationFromKey(key listenerLookupKey) (netip.AddrPort, error) {
+	var address netip.Addr
+	switch key.Family {
+	case addressFamilyIPv4:
+		address = netip.AddrFrom4([4]byte(key.TokenAddr[:4]))
+	case addressFamilyIPv6:
+		address = netip.AddrFrom16(key.TokenAddr)
+	default:
+		return netip.AddrPort{}, E.New("invalid listener lookup family: ", key.Family)
+	}
+	if key.ListenerPort == 0 {
+		return netip.AddrPort{}, E.New("invalid listener lookup port")
+	}
+	return netip.AddrPortFrom(address.Unmap(), key.ListenerPort), nil
+}
+
 func encodeAddress(family *uint8, destination *[16]byte, source netip.Addr) error {
 	source = source.Unmap()
 	if source.Is4() {
