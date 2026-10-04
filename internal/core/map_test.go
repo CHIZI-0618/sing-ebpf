@@ -32,10 +32,13 @@ func TestCompactMapCapacities(t *testing.T) {
 	if got := CompactCgroupMapCapacity().SocketBypass; got != 8192 {
 		t.Fatalf("compact cgroup socket-bypass capacity = %d, want 8192", got)
 	}
+	if got := CompactCgroupMapCapacity().UDPFlow; got != 16384 {
+		t.Fatalf("compact UDP flow capacity = %d, want 16384", got)
+	}
 	if got := CompactSharedPacketRewriteMapCapacity().Bypass; got != 8192 {
 		t.Fatalf("compact shared bypass capacity = %d, want 8192", got)
 	}
-	if CompactSelfBypassSocketCapacity != 8192 || CompactTCAssignmentCapacity != 8192 {
-		t.Fatal("compact self-bypass and TC assignment capacities must remain aligned")
+	if CompactSelfBypassSocketCapacity != 16384 || CompactTCAssignmentCapacity != 16384 {
+		t.Fatal("compact self-bypass and TC assignment capacities must be 16384")
 	}
 }

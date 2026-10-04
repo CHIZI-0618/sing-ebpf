@@ -20,7 +20,7 @@ import (
 
 const (
 	selfBypassSocketCapacity        = 65536
-	CompactSelfBypassSocketCapacity = 8192
+	CompactSelfBypassSocketCapacity = 16384
 )
 
 // SelfBypass owns the socket-cookie map used by the local TC classifier. The

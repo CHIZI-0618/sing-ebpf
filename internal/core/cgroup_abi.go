@@ -26,7 +26,7 @@ const (
 	CompactTCPRedirectMapCapacity            = 8192
 	CompactUDPRedirectMapCapacity            = 8192
 	CompactUDPPeerMapCapacity                = 4096
-	CompactUDPFlowMapCapacity                = 8192
+	CompactUDPFlowMapCapacity                = 16384
 	CompactSocketBypassMapCapacity           = 8192
 	MaxConfigurableMapCapacity               = 1 << 20
 	originalDestinationFlagConnectedUDP      = 1
