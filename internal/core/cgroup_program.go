@@ -75,6 +75,7 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 	}
 	if err != nil {
 		if b.runtime.udp_release_observer {
+			b.runtime.udp_release_fallback_reason = "release_notification_program_load_failed"
 			if disableErr := b.disableUDPReleaseObserver(); disableErr != nil {
 				return nil, E.Errors(err, disableErr)
 			}

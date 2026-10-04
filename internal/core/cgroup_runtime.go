@@ -40,14 +40,17 @@ const (
 // UDPStateDiagnostics describes the effective cleanup and recovery path. It
 // is a snapshot and performs no map iteration or probing.
 type UDPStateDiagnostics struct {
-	State                string `json:"state"`
-	CleanupMode          string `json:"cleanup_mode"`
-	UserspaceCleanupMode string `json:"userspace_cleanup_mode"`
-	RecoveryMode         string `json:"recovery_mode"`
-	RecoveryConsumeMode  string `json:"recovery_consume_mode"`
-	SocketRelease        bool   `json:"socket_release"`
-	NetworkGeneration    uint32 `json:"network_generation"`
-	MapPressure          string `json:"map_pressure"`
+	State                 string `json:"state"`
+	CleanupMode           string `json:"cleanup_mode"`
+	UserspaceCleanupMode  string `json:"userspace_cleanup_mode"`
+	RecoveryMode          string `json:"recovery_mode"`
+	RecoveryConsumeMode   string `json:"recovery_consume_mode"`
+	SocketRelease         bool   `json:"socket_release"`
+	NetworkGeneration     uint32 `json:"network_generation"`
+	MapPressure           string `json:"map_pressure"`
+	ReleaseObserver       bool   `json:"release_observer"`
+	ReleaseFallbackReason string `json:"release_fallback_reason,omitempty"`
+	ReleaseProgram        string `json:"release_program,omitempty"`
 }
 
 func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
@@ -69,6 +72,17 @@ func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
 	result.CleanupMode = cgroupUDPCleanupModeLocked(b.runtime)
 	result.UserspaceCleanupMode = cgroupUDPUserspaceCleanupModeLocked(b.runtime)
 	result.SocketRelease = b.runtime.socket_release_supported
+	result.ReleaseObserver = b.runtime.udp_release_observer && b.runtime.udp_release_reader != nil
+	result.ReleaseFallbackReason = b.runtime.udp_release_fallback_reason
+	if !b.runtime.socket_release_supported && result.ReleaseFallbackReason == "" {
+		result.ReleaseFallbackReason = "socket_release_unsupported"
+	}
+	if b.runtime.socket_release_supported {
+		result.ReleaseProgram = "sb_ebpf_rel"
+		if result.ReleaseObserver {
+			result.ReleaseProgram = "sb_ebpf_rel_notify"
+		}
+	}
 	result.NetworkGeneration = b.networkGeneration
 	if result.SocketRelease {
 		result.State = cgroupUDPStateSocketRelease
@@ -79,6 +93,14 @@ func (b *CgroupBackend) UDPStateDiagnostics() UDPStateDiagnostics {
 		result.State = cgroupUDPStateTimeoutFallback
 	}
 	return result
+}
+
+// UDPReleasePathDiagnostics reports the actual socket-release notification
+// path without exposing the internal diagnostics structure to callers that
+// only need these three stable fields.
+func (b *CgroupBackend) UDPReleasePathDiagnostics() (observer bool, fallbackReason, program string) {
+	state := b.UDPStateDiagnostics()
+	return state.ReleaseObserver, state.ReleaseFallbackReason, state.ReleaseProgram
 }
 
 func (b *CgroupBackend) udpRecoveryConsumeModeString() string {

@@ -59,6 +59,9 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 			name: "sb_cg_sock_byp", mapType: CiliumEBPF.LRUHash, maxEntries: 1,
 		}
 	}
+	if runtimeState.socket_release_supported && features.HaveMapType(CiliumEBPF.RingBuf) != nil {
+		runtimeState.udp_release_fallback_reason = "ringbuf_unsupported"
+	}
 	if runtimeState.socket_release_supported && features.HaveMapType(CiliumEBPF.RingBuf) == nil {
 		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
 			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: udpCapacity, flags: bpfFlagNoPrealloc,
@@ -73,6 +76,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	var err error
 	runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
 	if err != nil && overrides["cgroup_udp_release_events"].mapType == CiliumEBPF.RingBuf {
+		runtimeState.udp_release_fallback_reason = "ringbuf_map_load_failed"
 		delete(overrides, "cgroup_udp_release_events")
 		delete(overrides, "cgroup_udp_release_stats")
 		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
@@ -104,6 +108,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 			runtimeState.udp_release_reader = reader
 			runtimeState.udp_release_observer = true
 		} else {
+			runtimeState.udp_release_fallback_reason = "ringbuf_reader_unavailable"
 			_ = events.Close()
 			delete(runtimeState.maps, "cgroup_udp_release_events")
 		}

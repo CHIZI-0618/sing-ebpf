@@ -61,6 +61,35 @@ func TestMapPressureLevels(t *testing.T) {
 	}
 }
 
+func TestMapOccupancyStatusIgnoresNonApplicableMaps(t *testing.T) {
+	status := mapOccupancyStatus([]MapOccupancy{
+		{Pressure: "not_applicable", Supported: false},
+		{Pressure: "healthy", Supported: true},
+	})
+	if status != "pass" {
+		t.Fatalf("map occupancy status = %q, want pass", status)
+	}
+	status = mapOccupancyStatus([]MapOccupancy{
+		{Pressure: "not_applicable", Supported: false},
+		{Pressure: "warning", Supported: true},
+	})
+	if status != "warning" {
+		t.Fatalf("map occupancy status = %q, want warning", status)
+	}
+}
+
+func TestUDPReleasePathDiagnosticsReportsFallback(t *testing.T) {
+	backend := &CgroupBackend{runtime: &cgroupRuntime{
+		enable_udp:                  true,
+		socket_release_supported:    true,
+		udp_release_fallback_reason: "release_notification_program_load_failed",
+	}}
+	observer, reason, program := backend.UDPReleasePathDiagnostics()
+	if observer || reason != "release_notification_program_load_failed" || program != "sb_ebpf_rel" {
+		t.Fatalf("release path = observer=%t reason=%q program=%q", observer, reason, program)
+	}
+}
+
 func TestSocketReleaseAttachPermissionFallsBack(t *testing.T) {
 	for _, errno := range []error{unix.EPERM, unix.EACCES} {
 		if !socketReleaseAttachUnavailable(fmt.Errorf("attach socket release: %w", errno)) {

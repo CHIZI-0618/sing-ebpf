@@ -66,7 +66,7 @@ func InspectMapOccupancy() MapOccupancyReport {
 		}
 		if !occupancySupported(info.Type) {
 			item.Error = "map type does not support safe key iteration"
-			item.Pressure = "recovery_failed"
+			item.Pressure = "not_applicable"
 			report.Maps = append(report.Maps, item)
 			_ = m.Close()
 			continue
@@ -80,15 +80,23 @@ func InspectMapOccupancy() MapOccupancyReport {
 		report.Maps = append(report.Maps, item)
 		_ = m.Close()
 	}
-	for _, item := range report.Maps {
-		if item.Pressure == "degraded" || item.Pressure == "recovery_failed" {
-			report.Status = "degraded"
-		} else if item.Pressure == "warning" && report.Status == "pass" {
-			report.Status = "warning"
+	sort.Slice(report.Maps, func(i, j int) bool { return report.Maps[i].Name < report.Maps[j].Name })
+	if report.Error == "" {
+		report.Status = mapOccupancyStatus(report.Maps)
+	}
+	return report
+}
+
+func mapOccupancyStatus(maps []MapOccupancy) string {
+	status := "pass"
+	for _, item := range maps {
+		if item.Pressure == "degraded" {
+			return "degraded"
+		} else if item.Pressure == "warning" {
+			status = "warning"
 		}
 	}
-	sort.Slice(report.Maps, func(i, j int) bool { return report.Maps[i].Name < report.Maps[j].Name })
-	return report
+	return status
 }
 
 func mapPressure(entries, maxEntries uint32, failed bool) string {

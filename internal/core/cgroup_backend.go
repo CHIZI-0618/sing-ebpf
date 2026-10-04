@@ -77,6 +77,7 @@ type cgroupRuntime struct {
 	udp_release_reader          *ringbuf.Reader
 	udp_release_record          ringbuf.Record
 	udp_release_observer        bool
+	udp_release_fallback_reason string
 	socket_release_supported    bool
 	coarse_time_supported       bool
 	enable_tcp                  bool
