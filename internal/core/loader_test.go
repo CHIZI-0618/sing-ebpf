@@ -149,6 +149,24 @@ func TestRawCgroupAttachDoesNotFallbackOnFatalError(t *testing.T) {
 	}
 }
 
+func TestOwnedCgroupProgramNameIncludesLegacyPrefix(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		want bool
+	}{
+		{name: "sb_ebpf_conn4", want: true},
+		{name: "sing_ebpf_conn4", want: true},
+		{name: "cilium_conn4", want: false},
+		{name: "", want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ownedCgroupProgramName(testCase.name); got != testCase.want {
+				t.Fatalf("ownedCgroupProgramName(%q)=%v, want %v", testCase.name, got, testCase.want)
+			}
+		})
+	}
+}
+
 type objectMapLayout struct {
 	keySize   uint32
 	valueSize uint32

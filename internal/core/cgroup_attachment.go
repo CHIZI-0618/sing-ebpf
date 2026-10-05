@@ -122,42 +122,59 @@ func lockCgroupFile(cgroupFile *os.File) error {
 
 func detachOwnedCgroupPrograms(cgroupFD int) error {
 	for _, definition := range cgroupProgramDefinitions {
-		first, err := queryCgroupProgramIDs(cgroupFD, definition.attachType)
-		if err != nil {
+		if _, err := detachOwnedCgroupProgramsForAttach(cgroupFD, definition.attachType); err != nil {
 			if definition.attachType == CiliumEBPF.AttachCgroupInetSockRelease && socketReleaseUnavailable(err) {
 				continue
 			}
 			return err
 		}
-		second, err := queryCgroupProgramIDs(cgroupFD, definition.attachType)
-		if err != nil {
-			return err
-		}
-		if !sameProgramIDs(first, second) {
-			return unix.ESTALE
-		}
-		for _, programID := range first {
-			program, openErr := CiliumEBPF.NewProgramFromID(programID)
-			if openErr != nil {
-				return openErr
-			}
-			info, infoErr := program.Info()
-			if infoErr != nil {
-				_ = program.Close()
-				return infoErr
-			}
-			if strings.HasPrefix(info.Name, "sb_ebpf_") {
-				if detachErr := rawDetachProgram(cgroupFD, program, definition.attachType); detachErr != nil {
-					_ = program.Close()
-					return detachErr
-				}
-			}
-			if closeErr := program.Close(); closeErr != nil {
-				return closeErr
-			}
-		}
 	}
 	return nil
+}
+
+// detachOwnedCgroupProgramsForAttach removes only programs that belong to a
+// sing-ebpf generation. Older releases used the sing_ebpf_ prefix, while the
+// current diagnostic names use sb_ebpf_. Never detach an unknown owner: the
+// caller may be sharing the host cgroup with netd or another eBPF service.
+func detachOwnedCgroupProgramsForAttach(cgroupFD int, attachType CiliumEBPF.AttachType) (bool, error) {
+	first, err := queryCgroupProgramIDs(cgroupFD, attachType)
+	if err != nil {
+		return false, err
+	}
+	second, err := queryCgroupProgramIDs(cgroupFD, attachType)
+	if err != nil {
+		return false, err
+	}
+	if !sameProgramIDs(first, second) {
+		return false, unix.ESTALE
+	}
+	var detached bool
+	for _, programID := range first {
+		program, openErr := CiliumEBPF.NewProgramFromID(programID)
+		if openErr != nil {
+			return detached, openErr
+		}
+		info, infoErr := program.Info()
+		if infoErr != nil {
+			_ = program.Close()
+			return detached, infoErr
+		}
+		if ownedCgroupProgramName(info.Name) {
+			if detachErr := rawDetachProgram(cgroupFD, program, attachType); detachErr != nil {
+				_ = program.Close()
+				return detached, detachErr
+			}
+			detached = true
+		}
+		if closeErr := program.Close(); closeErr != nil {
+			return detached, closeErr
+		}
+	}
+	return detached, nil
+}
+
+func ownedCgroupProgramName(name string) bool {
+	return strings.HasPrefix(name, "sb_ebpf_") || strings.HasPrefix(name, "sing_ebpf_")
 }
 
 func queryCgroupProgramIDs(cgroupFD int, attachType CiliumEBPF.AttachType) ([]CiliumEBPF.ProgramID, error) {

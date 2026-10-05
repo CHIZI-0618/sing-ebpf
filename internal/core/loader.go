@@ -74,7 +74,16 @@ func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachTyp
 	// BPF_PROG_QUERY retain the historical fallback because there is no safe
 	// way to distinguish an empty hook from an unqueryable one.
 	if result, queryErr := queryCgroupPrograms(link.QueryOptions{Target: target, Attach: attachType}); queryErr == nil && len(result.Programs) > 0 {
-		return "", E.New("refusing to replace existing cgroup program owner")
+		if _, cleanupErr := detachOwnedCgroupProgramsForAttach(target, attachType); cleanupErr != nil {
+			return "", E.Cause(cleanupErr, "clean stale eBPF cgroup program")
+		}
+		result, queryErr = queryCgroupPrograms(link.QueryOptions{Target: target, Attach: attachType})
+		if queryErr != nil {
+			return "", queryErr
+		}
+		if len(result.Programs) > 0 {
+			return "", E.New("refusing to replace existing cgroup program owner")
+		}
 	}
 	// Keep the legacy fallback used before multi-only attachment was adopted.
 	// Some vendor kernels reject ALLOW_MULTI for otherwise usable hooks. An
