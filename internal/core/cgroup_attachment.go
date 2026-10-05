@@ -209,22 +209,33 @@ func queryCgroupProgramIDs(cgroupFD int, attachType CiliumEBPF.AttachType) ([]Ci
 	return ids, nil
 }
 
+// cgroupProgQueryAttr is the BPF_PROG_QUERY member of union bpf_attr, through
+// query.revision. It must not be shortened: Linux 6.17 and 6.18 write
+// query.revision back to offset 56 whatever attribute size the caller passes,
+// so a shorter attribute lets the kernel write past it (fixed upstream by
+// "bpf: fix BPF_PROG_QUERY OOB write and cgroup backward compat"). The layout
+// matches cilium/ebpf's sys.ProgQueryAttr.
+type cgroupProgQueryAttr struct {
+	targetFD           uint32
+	attachType         uint32
+	queryFlags         uint32
+	attachFlags        uint32
+	programIDs         uint64
+	programs           uint32
+	_                  uint32
+	programAttachFlags uint64
+	linkIDs            uint64
+	linkAttachFlags    uint64
+	revision           uint64
+}
+
 // queryCgroupHookFlags returns the attach mode the kernel recorded for a
 // cgroup hook (0, BPF_F_ALLOW_OVERRIDE or BPF_F_ALLOW_MULTI). cilium/ebpf's
 // QueryPrograms does not expose this field, so the request is issued directly;
 // with prog_cnt = 0 every kernel since BPF_PROG_QUERY was introduced returns
 // only the count and the flags.
 var queryCgroupHookFlags = func(cgroupFD int, attachType CiliumEBPF.AttachType) (uint32, error) {
-	// Leading fields of the BPF_PROG_QUERY member of union bpf_attr.
-	attr := struct {
-		targetFD    uint32
-		attachType  uint32
-		queryFlags  uint32
-		attachFlags uint32
-		programIDs  uint64
-		programs    uint32
-		_           uint32
-	}{
+	attr := cgroupProgQueryAttr{
 		targetFD:   uint32(cgroupFD),
 		attachType: uint32(attachType),
 	}
