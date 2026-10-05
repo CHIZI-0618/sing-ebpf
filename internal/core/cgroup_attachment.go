@@ -4,6 +4,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -150,24 +151,23 @@ func detachOwnedCgroupProgramsForAttach(cgroupFD int, attachType CiliumEBPF.Atta
 	}
 	var detached bool
 	for _, programID := range first {
-		program, openErr := CiliumEBPF.NewProgramFromID(programID)
-		if openErr != nil {
-			return detached, openErr
+		name, nameErr := programNameByID(programID)
+		if nameErr != nil {
+			return detached, nameErr
 		}
-		info, infoErr := program.Info()
-		if infoErr != nil {
-			_ = program.Close()
-			return detached, infoErr
-		}
-		if ownedCgroupProgramName(info.Name) {
+		if ownedCgroupProgramName(name) {
+			program, openErr := newProgramFromID(programID)
+			if openErr != nil {
+				return detached, openErr
+			}
 			if detachErr := rawDetachProgram(cgroupFD, program, attachType); detachErr != nil {
 				_ = program.Close()
 				return detached, detachErr
 			}
 			detached = true
-		}
-		if closeErr := program.Close(); closeErr != nil {
-			return detached, closeErr
+			if closeErr := program.Close(); closeErr != nil {
+				return detached, closeErr
+			}
 		}
 	}
 	return detached, nil
@@ -178,7 +178,7 @@ func ownedCgroupProgramName(name string) bool {
 }
 
 func queryCgroupProgramIDs(cgroupFD int, attachType CiliumEBPF.AttachType) ([]CiliumEBPF.ProgramID, error) {
-	result, err := link.QueryPrograms(link.QueryOptions{Target: cgroupFD, Attach: attachType})
+	result, err := queryCgroupPrograms(link.QueryOptions{Target: cgroupFD, Attach: attachType})
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +187,39 @@ func queryCgroupProgramIDs(cgroupFD int, attachType CiliumEBPF.AttachType) ([]Ci
 		ids[index] = result.Programs[index].ID
 	}
 	return ids, nil
+}
+
+var newProgramFromID = CiliumEBPF.NewProgramFromID
+
+var programNameByID = func(programID CiliumEBPF.ProgramID) (string, error) {
+	program, err := newProgramFromID(programID)
+	if err != nil {
+		return "", err
+	}
+	info, infoErr := program.Info()
+	closeErr := program.Close()
+	if infoErr != nil {
+		return "", infoErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	return info.Name, nil
+}
+
+func cgroupProgramOwnerNames(result *link.QueryResult) ([]string, error) {
+	owners := make([]string, 0, len(result.Programs))
+	for _, attached := range result.Programs {
+		name, err := programNameByID(attached.ID)
+		if err != nil {
+			return nil, err
+		}
+		if name == "" {
+			name = fmt.Sprintf("program-%d", attached.ID)
+		}
+		owners = append(owners, name)
+	}
+	return owners, nil
 }
 
 func (b *CgroupBackend) Attach() error {

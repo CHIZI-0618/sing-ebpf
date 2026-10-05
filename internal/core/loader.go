@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	BPFGen "github.com/CHIZI-0618/sing-ebpf/internal/bpfgen"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -82,7 +83,11 @@ func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachTyp
 			return "", queryErr
 		}
 		if len(result.Programs) > 0 {
-			return "", E.New("refusing to replace existing cgroup program owner")
+			owners, ownerErr := cgroupProgramOwnerNames(result)
+			if ownerErr != nil {
+				return "", E.Cause(ownerErr, "refusing to replace existing cgroup program owner (unable to identify existing program)")
+			}
+			return "", E.New("refusing to replace existing cgroup program owner(s): ", strings.Join(owners, ", "))
 		}
 	}
 	// Keep the legacy fallback used before multi-only attachment was adopted.
