@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unsafe"
 
 	E "github.com/sagernet/sing/common/exceptions"
 
@@ -160,6 +161,25 @@ func detachOwnedCgroupProgramsForAttach(cgroupFD int, attachType CiliumEBPF.Atta
 			if openErr != nil {
 				return detached, openErr
 			}
+			// A stale program that is the hook's only program may have taken the
+			// hook over from Android netd and never given it back. Put a netd
+			// placeholder back instead of emptying the hook; the interception
+			// backend takes it over again when it attaches and restores it on
+			// detach.
+			if len(first) == 1 {
+				restored, restoreErr := restoreNetdOwnerForStaleProgram(cgroupFD, attachType)
+				if restoreErr != nil {
+					_ = program.Close()
+					return detached, restoreErr
+				}
+				if restored {
+					detached = true
+					if closeErr := program.Close(); closeErr != nil {
+						return detached, closeErr
+					}
+					continue
+				}
+			}
 			if detachErr := rawDetachProgram(cgroupFD, program, attachType); detachErr != nil {
 				_ = program.Close()
 				return detached, detachErr
@@ -187,6 +207,32 @@ func queryCgroupProgramIDs(cgroupFD int, attachType CiliumEBPF.AttachType) ([]Ci
 		ids[index] = result.Programs[index].ID
 	}
 	return ids, nil
+}
+
+// queryCgroupHookFlags returns the attach mode the kernel recorded for a
+// cgroup hook (0, BPF_F_ALLOW_OVERRIDE or BPF_F_ALLOW_MULTI). cilium/ebpf's
+// QueryPrograms does not expose this field, so the request is issued directly;
+// with prog_cnt = 0 every kernel since BPF_PROG_QUERY was introduced returns
+// only the count and the flags.
+var queryCgroupHookFlags = func(cgroupFD int, attachType CiliumEBPF.AttachType) (uint32, error) {
+	// Leading fields of the BPF_PROG_QUERY member of union bpf_attr.
+	attr := struct {
+		targetFD    uint32
+		attachType  uint32
+		queryFlags  uint32
+		attachFlags uint32
+		programIDs  uint64
+		programs    uint32
+		_           uint32
+	}{
+		targetFD:   uint32(cgroupFD),
+		attachType: uint32(attachType),
+	}
+	_, _, errno := unix.Syscall(unix.SYS_BPF, unix.BPF_PROG_QUERY, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr))
+	if errno != 0 {
+		return 0, errno
+	}
+	return attr.attachFlags, nil
 }
 
 var newProgramFromID = CiliumEBPF.NewProgramFromID
@@ -253,12 +299,13 @@ func (b *CgroupBackend) Attach() error {
 		})
 		if err == nil {
 			b.runtime.links[slot] = programLink
-			b.runtime.attach_modes[slot] = "link_create"
+			b.runtime.attach_modes[slot] = cgroupAttachModeLinkCreate
 		} else if cgroupLinkUnavailable(err) {
-			var mode string
-			mode, err = attachProgramRawWithMode(cgroupFD, program, cgroupProgramDefinitions[slot].attachType)
+			var attachment legacyCgroupAttachment
+			attachment, err = attachProgramRawWithMode(cgroupFD, program, cgroupProgramDefinitions[slot].attachType, true)
 			if err == nil {
-				b.runtime.attach_modes[slot] = mode
+				b.runtime.attach_modes[slot] = attachment.mode
+				b.runtime.displaced[slot] = attachment.displaced
 			}
 		}
 		if err != nil {
@@ -304,6 +351,13 @@ func (b *CgroupBackend) detachProgramsLocked() error {
 				detachErr = E.Errors(detachErr, err)
 			}
 			continue
+		} else if displaced := b.runtime.displaced[slot]; displaced != nil {
+			// Put the netd placeholder back in place of our program. A
+			// failure keeps the displaced owner for a cleanup retry.
+			err = restoreDisplacedCgroupOwner(cgroupFD, b.runtime.programs[slot], displaced, cgroupProgramDefinitions[slot].attachType)
+			if err == nil {
+				b.runtime.displaced[slot] = nil
+			}
 		} else {
 			err = rawDetachProgram(cgroupFD, b.runtime.programs[slot], cgroupProgramDefinitions[slot].attachType)
 		}

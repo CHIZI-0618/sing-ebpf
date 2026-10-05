@@ -121,6 +121,30 @@ otherwise it uses bounded LRU recovery. The probe never performs an
 unflagged legacy attach, so it cannot replace an existing Android/netd
 socket-release owner merely to test the optional capability.
 
+The kernel puts a cgroup hook in single-program mode when a program is attached
+without `BPF_F_ALLOW_MULTI`, and then rejects every multi-program attachment on
+that hook, `BPF_LINK_CREATE` included. Android 15+ netd does this on the
+connect, sendmsg and recvmsg hooks of the cgroup v2 root with a placeholder
+that only returns `BPF_ALLOW`. The backend displaces exactly that kind of
+owner: the single program of a hook in single-program (or override) mode whose
+translated instructions reduce to `r0 = 1; exit`. Program names, BTF and pin
+paths differ between AOSP, vendor and custom-ROM netd builds, so they are not
+part of the decision; only when the kernel withholds the instructions is the
+owner accepted on identity, and then only if it is netd's pinned program. The
+owner is replaced atomically with an attach that uses the hook's own flags, so
+the hook keeps the single-program mode a restarting netd depends on, and it is
+reported as attach mode `legacy_netd_replace`. The owner is held open and
+attached again when the backend detaches. netd's socket-release program does
+traffic-accounting cleanup and is never displaced; while it holds that hook in
+single-program mode, UDP uses the bounded LRU cleanup. Optional components,
+such as the process tracker, never displace an owner. Every other owner is
+kept, and the attach error names the programs on the hook and, for an owner
+that was inspected, why it was kept. On a device with netd, a stale
+interception program that is the only program of such a hook is swapped for
+netd's pinned program, or for an equivalent `sb_hook_allow` pass-through,
+instead of being detached: an emptied hook would let the next attach put it in
+multi-program mode, and a restarting netd aborts on that.
+
 The interception cgroup is independent of an optional exclusive process cgroup
 used for self-bypass. A broad interception cgroup still excludes consumer-owned
 sockets through the shared cookie map. Userspace socket controls remain the

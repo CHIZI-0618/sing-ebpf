@@ -32,8 +32,28 @@ var loadSharedNetwork = BPFGen.LoadSharedNetwork
 
 var loadICMPEchoReply = BPFGen.LoadICMPEchoReply
 
+const (
+	cgroupAttachModeLinkCreate      = "link_create"
+	cgroupAttachModeLegacyMulti     = "legacy_multi"
+	cgroupAttachModeLegacyExclusive = "legacy_exclusive"
+	// cgroupAttachModeNetdReplace is an unflagged attach that replaced the
+	// pass-through placeholder Android netd holds on the hook. The hook stays
+	// in single-program mode and the placeholder returns on detach.
+	cgroupAttachModeNetdReplace = "legacy_netd_replace"
+)
+
+// legacyCgroupAttachment describes a successful legacy BPF_PROG_ATTACH: the
+// variant that succeeded and, for cgroupAttachModeNetdReplace, the program it
+// displaced, which the owner of the attachment must restore on detach.
+type legacyCgroupAttachment struct {
+	mode      string
+	displaced *displacedCgroupOwner
+}
+
+// attachProgramRaw is the legacy attach of optional components. It never
+// displaces an existing owner, not even a pass-through one.
 func attachProgramRaw(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
-	_, err := attachProgramRawWithMode(target, program, attachType)
+	_, err := attachProgramRawWithMode(target, program, attachType, false)
 	return err
 }
 
@@ -55,7 +75,17 @@ func attachProgramRawMultiOnly(target int, program *CiliumEBPF.Program, attachTy
 // vendor kernel can reject BPF_F_ALLOW_MULTI while still accepting the
 // single-program legacy operation. Callers must expose the effective path,
 // not merely the attempted fast path.
-func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) (string, error) {
+//
+// replacePassThrough lets the attach replace a pass-through owner, such as the
+// placeholder Android 15+ netd keeps on the root socket-address hooks (see
+// cgroup_netd.go). Only the interception backend sets it: it has no fallback,
+// and it restores the displaced owner on detach.
+func attachProgramRawWithMode(
+	target int,
+	program *CiliumEBPF.Program,
+	attachType CiliumEBPF.AttachType,
+	replacePassThrough bool,
+) (legacyCgroupAttachment, error) {
 	options := link.RawAttachProgramOptions{
 		Target:  target,
 		Program: program,
@@ -64,30 +94,48 @@ func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachTyp
 	}
 	multiErr := rawAttachProgram(options)
 	if multiErr == nil {
-		return "legacy_multi", nil
+		return legacyCgroupAttachment{mode: cgroupAttachModeLegacyMulti}, nil
 	}
 	if !cgroupMultiAttachUnavailable(multiErr) {
-		return "", multiErr
+		return legacyCgroupAttachment{}, multiErr
 	}
 	// An unflagged legacy attach replaces the current exclusive owner. Do not
 	// displace a vendor/OS cgroup hook that we cannot restore after shutdown;
-	// callers will use their userspace fallback instead. Kernels without
-	// BPF_PROG_QUERY retain the historical fallback because there is no safe
-	// way to distinguish an empty hook from an unqueryable one.
+	// callers will use their userspace fallback instead. The one exception is
+	// a pass-through owner when replacePassThrough is set: it is held open and
+	// restored on detach. Kernels without BPF_PROG_QUERY retain the historical
+	// fallback because there is no safe way to distinguish an empty hook from
+	// an unqueryable one.
 	if result, queryErr := queryCgroupPrograms(link.QueryOptions{Target: target, Attach: attachType}); queryErr == nil && len(result.Programs) > 0 {
 		if _, cleanupErr := detachOwnedCgroupProgramsForAttach(target, attachType); cleanupErr != nil {
-			return "", E.Cause(cleanupErr, "clean stale eBPF cgroup program")
+			return legacyCgroupAttachment{}, E.Cause(cleanupErr, "clean stale eBPF cgroup program")
 		}
 		result, queryErr = queryCgroupPrograms(link.QueryOptions{Target: target, Attach: attachType})
 		if queryErr != nil {
-			return "", queryErr
+			return legacyCgroupAttachment{}, queryErr
 		}
 		if len(result.Programs) > 0 {
+			var keptReason error
+			if replacePassThrough {
+				var displaced *displacedCgroupOwner
+				displaced, keptReason = displaceableCgroupOwner(target, attachType, result.Programs)
+				if displaced != nil {
+					if err := replaceCgroupOwner(target, program, attachType, displaced.flags); err != nil {
+						_ = displaced.Close()
+						return legacyCgroupAttachment{}, err
+					}
+					return legacyCgroupAttachment{mode: cgroupAttachModeNetdReplace, displaced: displaced}, nil
+				}
+			}
 			owners, ownerErr := cgroupProgramOwnerNames(result)
 			if ownerErr != nil {
-				return "", E.Cause(ownerErr, "refusing to replace existing cgroup program owner (unable to identify existing program)")
+				return legacyCgroupAttachment{}, E.Cause(ownerErr, "refusing to replace existing cgroup program owner (unable to identify existing program)")
 			}
-			return "", E.New("refusing to replace existing cgroup program owner(s): ", strings.Join(owners, ", "))
+			message := "refusing to replace existing cgroup program owner(s): " + strings.Join(owners, ", ")
+			if keptReason != nil {
+				return legacyCgroupAttachment{}, E.Cause(keptReason, message)
+			}
+			return legacyCgroupAttachment{}, E.New(message)
 		}
 	}
 	// Keep the legacy fallback used before multi-only attachment was adopted.
@@ -96,9 +144,9 @@ func attachProgramRawWithMode(target int, program *CiliumEBPF.Program, attachTyp
 	// is attempted only after errors known to indicate unavailable multi attach.
 	options.Flags = 0
 	if err := rawAttachProgram(options); err != nil {
-		return "", err
+		return legacyCgroupAttachment{}, err
 	}
-	return "legacy_exclusive", nil
+	return legacyCgroupAttachment{mode: cgroupAttachModeLegacyExclusive}, nil
 }
 
 func cgroupMultiAttachUnavailable(err error) bool {
@@ -107,7 +155,9 @@ func cgroupMultiAttachUnavailable(err error) bool {
 		errors.Is(err, linuxErrnoNotSupported)
 }
 
-func rawDetachProgram(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
+// rawDetachProgram is a variable so tests can observe the detach that
+// precedes restoring a displaced owner without a kernel object.
+var rawDetachProgram = func(target int, program *CiliumEBPF.Program, attachType CiliumEBPF.AttachType) error {
 	return link.RawDetachProgram(link.RawDetachProgramOptions{Target: target, Program: program, Attach: attachType})
 }
 

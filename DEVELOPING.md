@@ -125,16 +125,29 @@ BTF evidence are kept separate from ordinary capability selection.
 
 Current important fallbacks include TCX → owned `clsact`, SOCKMAP-capable TCP →
 legacy TCP lookup, cgroup socket-release notification → bounded LRU cleanup,
-socket-release probe permission denial → the same bounded LRU cleanup, and
-cgroup multi-program → compatible legacy exclusive attachment. Do not turn
-an optional fallback failure into a silent feature claim; diagnostics must name
-the effective path. In particular, the runtime cgroup diagnostics distinguish
-`link_create`, `legacy_multi`, `legacy_exclusive`, and `mixed` attachment paths,
-as well as the effective UDP cleanup, socket-storage, and time-source modes.
+socket-release probe permission denial → the same bounded LRU cleanup,
+cgroup multi-program → compatible legacy exclusive attachment, and a root hook
+held by the Android 15+ netd pass-through placeholder → unflagged replacement
+of that placeholder, restored on detach. Do not turn an optional fallback
+failure into a silent feature claim; diagnostics must name the effective path.
+In particular, the runtime cgroup diagnostics distinguish `link_create`,
+`legacy_multi`, `legacy_exclusive`, `legacy_netd_replace`, and `mixed`
+attachment paths, as well as the effective UDP cleanup, socket-storage, and
+time-source modes.
 The socket-release capability probe is deliberately multi-only: it must never
 fall back to an unflagged attach that could replace an existing cgroup owner.
 The ordinary cgroup hook attach may still use the legacy-exclusive fallback
-after querying for an existing owner.
+after querying for an existing owner. The only existing owner the interception
+backend replaces is a pass-through recognized in `cgroup_netd.go`: the lone
+owner of a hook in single-program or override mode whose translated
+instructions reduce to `r0 = 1; exit`. Names, BTF and pins vary across netd
+builds and are consulted only when the kernel withholds the instructions. The
+replacement and the restore use the hook's own flags, so the hook never leaves
+the mode netd's restart path requires, and the displaced program is kept open
+and put back by the same code that detaches ours. Optional components that
+attach through `attachCgroupProgram` never replace an owner. Stale-program
+reclaim on a netd device swaps in netd's pin or an `sb_hook_allow`
+pass-through rather than emptying the hook.
 
 On kernels without `BPF_MAP_LOOKUP_AND_DELETE_ELEM`, userspace must not emulate
 atomic consume with separate lookup and delete syscalls. It retains the bounded
