@@ -73,4 +73,9 @@ const (
 
 	// sb_rel_probe: one-shot cgroup socket-release capability probe.
 	kernelProgramNameReleaseProbe = "sb_rel_probe"
+
+	// sb_hook_allow: pass-through program put back on an Android netd hook
+	// when the netd program a crashed backend displaced is no longer at hand.
+	// It must not carry an interception prefix: it outlives the backend.
+	kernelProgramNameHookPlaceholder = "sb_hook_allow"
 )
