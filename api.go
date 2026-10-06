@@ -286,6 +286,10 @@ func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.A
 	return core.UnwrapTCBackend(b).LookupAssignment(protocol, source, destination, interfaceIndex, remove)
 }
 
+func (b *TCBackend) RemoveAssignmentIfMatch(protocol uint8, source, destination netip.AddrPort, interfaceIndex uint32, expected TCAssignment) (bool, error) {
+	return core.UnwrapTCBackend(b).RemoveAssignmentIfMatch(protocol, source, destination, interfaceIndex, expected)
+}
+
 func (b *TCBackend) Stats() (TCStats, error) {
 	return core.UnwrapTCBackend(b).Stats()
 }

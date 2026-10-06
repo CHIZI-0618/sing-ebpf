@@ -141,3 +141,29 @@ func TestLookupAssignmentKeepsEntryWhenNotAsked(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveAssignmentIfMatch(t *testing.T) {
+	backend := newTestAssignmentBackend(t)
+	source := netip.MustParseAddrPort("192.0.2.10:53000")
+	destination := netip.MustParseAddrPort("1.1.1.1:443")
+	expected := TCAssignment{SocketCookie: 0x4444, InterfaceIndex: 17, Path: TCPathShared}
+	writeTestAssignment(t, backend, ProtocolUDP, source, destination, 17, expected)
+
+	if removed, err := backend.RemoveAssignmentIfMatch(ProtocolUDP, source, destination, 17, TCAssignment{SocketCookie: 0x9999}); err != nil {
+		t.Fatalf("mismatched removal: %v", err)
+	} else if removed {
+		t.Fatal("mismatched assignment was removed")
+	}
+	if _, err := backend.LookupAssignment(ProtocolUDP, source, destination, 17, false); err != nil {
+		t.Fatalf("mismatched removal deleted assignment: %v", err)
+	}
+
+	if removed, err := backend.RemoveAssignmentIfMatch(ProtocolUDP, source, destination, 17, expected); err != nil {
+		t.Fatalf("matching removal: %v", err)
+	} else if !removed {
+		t.Fatal("matching assignment was not removed")
+	}
+	if _, err := backend.LookupAssignment(ProtocolUDP, source, destination, 17, false); err == nil {
+		t.Fatal("matching removal left assignment in map")
+	}
+}
