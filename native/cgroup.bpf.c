@@ -32,6 +32,12 @@ enum cgroup_protocol_mode {
         .max_entries = 1U, \
     }
 
+#define MAP_FLAGS(name, key, value, map_type, entries, flags) \
+    struct bpf_map_def SEC("maps") name = { \
+        .type = map_type, .key_size = sizeof(key), .value_size = sizeof(value), \
+        .max_entries = entries, .map_flags = flags, \
+    }
+
 SB_FORCE_MAPS(cgroup);
 
 MAP(cgroup_control, __u32, struct sb_ebpf_cgroup_control, BPF_MAP_TYPE_ARRAY);
@@ -46,7 +52,8 @@ MAP(cgroup_udp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value,
 // listener accepts the connection, so they cannot answer later queries.
 MAP(cgroup_tcp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_udp_flow, struct sb_ebpf_udp_flow_key, struct sb_ebpf_udp_flow_value, BPF_MAP_TYPE_LRU_HASH);
-MAP(cgroup_socket_bypass, __u64, __u32, BPF_MAP_TYPE_LRU_HASH);
+/* Shared with the TC self-bypass owner. Do not silently evict live sockets. */
+MAP_FLAGS(cgroup_socket_bypass, __u64, __u32, BPF_MAP_TYPE_HASH, 16384U, BPF_F_NO_PREALLOC);
 MAP(cgroup_uid_policy, struct sb_ebpf_uid_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE);
 MAP(cgroup_bypass_port, struct sb_ebpf_port_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_bypass_ipv4, struct sb_ebpf_ipv4_cidr_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE);

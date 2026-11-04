@@ -188,9 +188,9 @@ func TestSelfBypassModes(t *testing.T) {
 		cleanup      string
 		cgroupAttach bool
 	}{
-		{SelfBypassUserspace, "userspace_socket_cookie", "lru_fallback", false},
+		{SelfBypassUserspace, "userspace_socket_cookie", "userspace_unregister", false},
 		{SelfBypassCgroupSocket, "cgroup_socket_cookie", "socket_release", true},
-		{SelfBypassCgroupSocketAddr, "cgroup_socket_addr", "lru_fallback", true},
+		{SelfBypassCgroupSocketAddr, "cgroup_socket_addr", "userspace_unregister", true},
 		{SelfBypassCgroupSocketAddrRelease, "cgroup_socket_addr_release", "socket_release", true},
 		{SelfBypassUserspaceRelease, "userspace_socket_cookie_release", "socket_release", false},
 	}

@@ -58,7 +58,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	if selfBypassMap != nil {
 		// The temporary object map is replaced by the shared owner below.
 		overrides["cgroup_socket_bypass"] = mapSpecOverride{
-			name: "sb_cg_sock_byp", mapType: CiliumEBPF.LRUHash, maxEntries: 1,
+			name: "sb_cg_sock_byp", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
 		}
 	}
 	ringbufSupported := features.HaveMapType(CiliumEBPF.RingBuf) == nil

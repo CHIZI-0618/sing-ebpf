@@ -89,13 +89,14 @@ func (m SelfBypassMode) String() string {
 }
 
 // CleanupMode reports how entries in the self-bypass map are removed.
-// lru_fallback is a safety net, not a precise socket lifecycle mechanism.
+// The map itself never silently evicts entries; when no release hook is
+// available, callers must explicitly unregister sockets.
 func (m SelfBypassMode) CleanupMode() string {
 	switch m {
 	case SelfBypassCgroupSocket, SelfBypassCgroupSocketAddrRelease, SelfBypassUserspaceRelease:
 		return "socket_release"
 	default:
-		return "lru_fallback"
+		return "userspace_unregister"
 	}
 }
 
@@ -147,10 +148,11 @@ func (b *SelfBypass) prepareMapLocked() (*CiliumEBPF.Map, error) {
 	memlockErr := raiseMemlockLimit()
 	sockets, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
 		Name:       "sb_self_sockets",
-		Type:       CiliumEBPF.LRUHash,
+		Type:       CiliumEBPF.Hash,
 		KeySize:    8,
 		ValueSize:  4,
 		MaxEntries: b.capacity,
+		Flags:      bpfFlagNoPrealloc,
 	})
 	if err != nil {
 		return nil, E.Cause(explainBPFPermissionError(err, memlockErr), "create eBPF self-bypass socket map")
@@ -238,14 +240,18 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		if socketAddrErr == nil {
 			socketAddrErr = b.verifyOwnerMarking(true, config)
 			if socketAddrErr == nil {
-				if b.attachCgroupRelease(cgroupPath, false) == nil {
+				if releaseErr := b.attachCgroupRelease(cgroupPath, false); releaseErr == nil {
 					b.mode.Store(uint32(SelfBypassCgroupSocketAddrRelease))
-				} else {
-					// Keep the address hooks active when the optional release hook is
-					// unavailable. LRU remains the safe fallback for this path.
-					b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
+					return nil
 				}
-				return nil
+				// Address hooks create entries in the shared ownership map. Do not
+				// keep them without a release hook: the map is intentionally a
+				// non-evicting hash, so falling back to userspace registration is
+				// safer than leaking entries or silently recapturing sockets.
+				if closeErr := b.closeHooks(); closeErr != nil {
+					return E.Errors(socketAddrErr, closeErr)
+				}
+				socketAddrErr = E.New("eBPF self-bypass socket-address hooks require socket-release cleanup")
 			}
 			if closeErr := b.closeHooks(); closeErr != nil {
 				return E.Errors(socketAddrErr, closeErr)

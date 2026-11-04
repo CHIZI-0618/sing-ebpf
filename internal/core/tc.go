@@ -307,7 +307,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 			selfMapCapacity = 1
 		}
 		mapOverrides["tc_self_sockets"] = mapSpecOverride{
-			name: "sb_self_sockets", mapType: CiliumEBPF.LRUHash, maxEntries: selfMapCapacity,
+			name: "sb_self_sockets", mapType: CiliumEBPF.Hash, maxEntries: selfMapCapacity, flags: bpfFlagNoPrealloc,
 		}
 	}
 	legacyTCP := forceLegacyTCP || !config.EnableTCP
