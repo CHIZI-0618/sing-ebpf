@@ -371,6 +371,13 @@ func (b *CgroupBackend) markUDPReleaseReaderFailed(reader *ringbuf.Reader) {
 	b.runtime.udp_release_reader = nil
 	b.runtime.udp_release_observer = false
 	b.runtime.udp_release_fallback_reason = "release_notification_reader_failed"
+	// Keep the already attached release hook on its cookie-only path. The
+	// object does not need to be reloaded: clearing the control bit prevents
+	// further ring-buffer submissions and avoids turning a reader failure into
+	// a permanent kernel-side drop stream.
+	if err := b.updateCgroupControl(b.listenerPort); err != nil {
+		b.runtime.udp_release_fallback_reason = "release_notification_reader_failed_control_update"
+	}
 	b.access.Unlock()
 	_ = reader.Close()
 }
