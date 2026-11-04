@@ -312,15 +312,22 @@ func (b *CgroupBackend) ReadUDPRelease() (UDPReleaseEvent, error) {
 	b.access.RUnlock()
 
 	b.udpReleaseReadAccess.Lock()
-	defer b.udpReleaseReadAccess.Unlock()
-	if err := reader.ReadInto(&runtimeState.udp_release_record); err != nil {
+	err := reader.ReadInto(&runtimeState.udp_release_record)
+	if err != nil {
+		b.udpReleaseReadAccess.Unlock()
 		if errors.Is(err, ringbuf.ErrClosed) {
 			return UDPReleaseEvent{}, os.ErrClosed
 		}
+		// A reader error is terminal for this ring-buffer instance. Do not
+		// leave diagnostics claiming that release notifications are active:
+		// userspace must fall back to deadline/watchdog cleanup instead.
+		b.markUDPReleaseReaderFailed(reader)
 		return UDPReleaseEvent{}, err
 	}
 	sample := runtimeState.udp_release_record.RawSample
 	if len(sample) != 40 {
+		b.udpReleaseReadAccess.Unlock()
+		b.markUDPReleaseReaderFailed(reader)
 		return UDPReleaseEvent{}, unix.EPROTO
 	}
 	var key listenerLookupKey
@@ -329,18 +336,43 @@ func (b *CgroupBackend) ReadUDPRelease() (UDPReleaseEvent, error) {
 	key.ListenerPort = binary.NativeEndian.Uint16(sample[10:12])
 	copy(key.TokenAddr[:], sample[12:28])
 	if key.Protocol != ProtocolUDP {
+		b.udpReleaseReadAccess.Unlock()
+		b.markUDPReleaseReaderFailed(reader)
 		return UDPReleaseEvent{}, unix.EPROTO
 	}
 	listener, err := listenerDestinationFromKey(key)
 	if err != nil {
+		b.udpReleaseReadAccess.Unlock()
+		b.markUDPReleaseReaderFailed(reader)
 		return UDPReleaseEvent{}, E.Cause(err, "decode UDP release listener")
 	}
+	b.udpReleaseReadAccess.Unlock()
 	return UDPReleaseEvent{
 		SocketCookie:      binary.NativeEndian.Uint64(sample[0:8]),
 		Listener:          listener,
 		NetworkGeneration: binary.NativeEndian.Uint32(sample[28:32]),
 		ReleasedAtNS:      binary.NativeEndian.Uint64(sample[32:40]),
 	}, nil
+}
+
+// markUDPReleaseReaderFailed disables only the userspace notification path.
+// The kernel socket-release hook and its recovery map remain usable; callers
+// continue through the deadline/watchdog cleanup path. The read lock is
+// released by ReadUDPRelease before this method closes the failed reader.
+func (b *CgroupBackend) markUDPReleaseReaderFailed(reader *ringbuf.Reader) {
+	if b == nil || reader == nil {
+		return
+	}
+	b.access.Lock()
+	if b.runtime == nil || b.runtime.udp_release_reader != reader {
+		b.access.Unlock()
+		return
+	}
+	b.runtime.udp_release_reader = nil
+	b.runtime.udp_release_observer = false
+	b.runtime.udp_release_fallback_reason = "release_notification_reader_failed"
+	b.access.Unlock()
+	_ = reader.Close()
 }
 
 func cgroupUDPCleanupModeLocked(runtimeState *cgroupRuntime) string {
