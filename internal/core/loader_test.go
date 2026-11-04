@@ -410,6 +410,8 @@ func TestKernelProgramNames(t *testing.T) {
 		kernelProgramNameCgroupSendmsg6,
 		kernelProgramNameCgroupRecvmsg6,
 		kernelProgramNameCgroupRelease,
+		kernelProgramNameCgroupGetpeername4,
+		kernelProgramNameCgroupGetpeername6,
 		kernelProgramNameTCLocalEthernet,
 		kernelProgramNameTCLocalRawIP,
 		kernelProgramNameTCSharedEthernet,
@@ -441,6 +443,38 @@ func TestKernelProgramNames(t *testing.T) {
 		}
 		if _, exists := seen[name]; exists {
 			t.Fatalf("duplicate kernel program name: %s", name)
+		}
+		seen[name] = struct{}{}
+	}
+}
+
+func TestKernelMapNames(t *testing.T) {
+	// These are the names assigned to maps that are visible in the kernel.
+	// Object symbols may be longer, but every selected override and every
+	// directly-created map must fit BPF_OBJ_NAME_LEN including its NUL byte.
+	names := []string{
+		"sb_cg_control", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_udp", "sb_cg_recover",
+		"sb_cg_token", "sb_cg_token_rev", "sb_cg_peer", "sb_cg_flow", "sb_cg_sock_byp",
+		"sb_cg_byp_port", "sb_cg_uid", "sb_cg_bypass4", "sb_cg_bypass6", "sb_cg_host4", "sb_cg_host6",
+		"sb_cg_rel_watch", "sb_cg_rel_evt", "sb_cg_rel_stat", "sb_cg_force4", "sb_cg_force6",
+		"sb_tc_ctl", "sb_tc_listen", "sb_tc_assign", "sb_tc_stats", "sb_tc_uid", "sb_tc_lbypass4",
+		"sb_tc_lbypass6", "sb_tc_sbypass4", "sb_tc_sbypass6", "sb_tc_insrc4", "sb_tc_insrc6",
+		"sb_tc_exsrc4", "sb_tc_exsrc6", "sb_tc_insmac", "sb_tc_exsmac", "sb_tc_host4", "sb_tc_host6",
+		"sb_tc_lport", "sb_tc_sport", "sb_self_sockets", "sb_tc_return", "sb_tc_rfrag",
+		"sb_tc_lforce4", "sb_tc_lforce6", "sb_tc_sforce4", "sb_tc_sforce6",
+		"sb_sh_control", "sb_sh_stats", "sb_sh_orig", "sb_sh_bypass", "sb_sh_token", "sb_sh_host4", "sb_sh_host6",
+		"sb_sh_inc4", "sb_sh_inc6", "sb_sh_exc4", "sb_sh_exc6", "sb_sh_inmac", "sb_sh_exmac", "sb_sh_port", "sb_sh_scratch",
+		"sb_sh_bypass4", "sb_sh_bypass6", "sb_sh_force4", "sb_sh_force6",
+		"sb_icmp_ctl", "sb_icmp_stat", "sb_icmp_lforce4", "sb_icmp_lforce6", "sb_icmp_sforce4", "sb_icmp_sforce6",
+		"sb_proc_owner", "sb_proc_uid", "sb_proc_probe", "sb_lpm_probe", "sb_tcx_prio",
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if err := validateKernelObjectName(name); err != nil {
+			t.Errorf("map name %q: %v", name, err)
+		}
+		if _, ok := seen[name]; ok {
+			t.Errorf("duplicate kernel map name: %s", name)
 		}
 		seen[name] = struct{}{}
 	}

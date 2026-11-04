@@ -125,7 +125,7 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 
 func loadProcessTrackerProbeObject(plan kernelProbePlan) (string, error) {
 	owners, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
-		Name:       "sb_proc_owner_probe",
+		Name:       "sb_proc_probe",
 		Type:       CiliumEBPF.LRUHash,
 		KeySize:    8,
 		ValueSize:  8,
