@@ -14,18 +14,21 @@ import (
 // MapOccupancy describes one sing-ebpf map observed by an explicit diagnostic
 // request. It is intentionally not collected by any runtime worker.
 type MapOccupancy struct {
-	ID         CiliumEBPF.MapID `json:"id"`
-	Name       string           `json:"name"`
-	Category   MapCategory      `json:"category"`
-	Type       string           `json:"type"`
-	MaxEntries uint32           `json:"max_entries"`
-	KeySize    uint32           `json:"key_size"`
-	ValueSize  uint32           `json:"value_size"`
-	Flags      uint32           `json:"flags"`
-	Entries    uint32           `json:"entries,omitempty"`
-	Pressure   string           `json:"pressure"`
-	Supported  bool             `json:"supported"`
-	Error      string           `json:"error,omitempty"`
+	ID                CiliumEBPF.MapID `json:"id"`
+	Name              string           `json:"name"`
+	Category          MapCategory      `json:"category"`
+	Type              string           `json:"type"`
+	MaxEntries        uint32           `json:"max_entries"`
+	KeySize           uint32           `json:"key_size"`
+	ValueSize         uint32           `json:"value_size"`
+	Flags             uint32           `json:"flags"`
+	Entries           uint32           `json:"entries,omitempty"`
+	Pressure          string           `json:"pressure"`
+	OccupancyMode     string           `json:"occupancy_mode"`
+	EvictionMode      string           `json:"eviction_mode"`
+	AdmissionCritical bool             `json:"admission_critical"`
+	Supported         bool             `json:"supported"`
+	Error             string           `json:"error,omitempty"`
 }
 
 // MapCategory identifies the semantic role used when interpreting map
@@ -45,8 +48,15 @@ const (
 // classification here prevents consumers from duplicating sing-ebpf's map
 // naming scheme.
 type mapMetadata struct {
-	category MapCategory
+	category          MapCategory
+	evictionMode      string
+	admissionCritical bool
 }
+
+const (
+	mapEvictionNone         = "none"
+	mapEvictionLRUSafeCache = "lru_safe_cache"
+)
 
 var configuredPolicyMapMetadata = map[string]mapMetadata{
 	"sb_cg_force4":    {category: MapCategoryConfiguredPolicy},
@@ -80,9 +90,18 @@ var configuredPolicyMapMetadata = map[string]mapMetadata{
 
 func metadataForMapName(name string) mapMetadata {
 	if metadata, ok := configuredPolicyMapMetadata[name]; ok {
+		metadata.evictionMode = mapEvictionNone
 		return metadata
 	}
-	return mapMetadata{category: MapCategoryRuntime}
+	metadata := mapMetadata{category: MapCategoryRuntime, evictionMode: mapEvictionNone}
+	switch name {
+	case "sb_tc_rfrag", "sb_cg_recover", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_flow", "sb_cg_sock_byp", "sb_sh_bypass":
+		metadata.evictionMode = mapEvictionLRUSafeCache
+	}
+	if name == "sb_tc_assign" {
+		metadata.admissionCritical = true
+	}
+	return metadata
 }
 
 type MapOccupancyReport struct {
@@ -128,12 +147,15 @@ func InspectMapOccupancy() MapOccupancyReport {
 }
 
 func inspectMapOccupancy(m *CiliumEBPF.Map, id CiliumEBPF.MapID, info *CiliumEBPF.MapInfo) MapOccupancy {
-	item := MapOccupancy{ID: id, Name: info.Name, Category: metadataForMapName(info.Name).category, Type: info.Type.String(),
-		MaxEntries: info.MaxEntries, KeySize: info.KeySize, ValueSize: info.ValueSize, Flags: info.Flags}
+	metadata := metadataForMapName(info.Name)
+	item := MapOccupancy{ID: id, Name: info.Name, Category: metadata.category, Type: info.Type.String(),
+		MaxEntries: info.MaxEntries, KeySize: info.KeySize, ValueSize: info.ValueSize, Flags: info.Flags,
+		OccupancyMode: "not_applicable", EvictionMode: metadata.evictionMode, AdmissionCritical: metadata.admissionCritical}
 	if !occupancySupported(info.Type) {
 		item.Pressure = "not_applicable"
 		return item
 	}
+	item.OccupancyMode = "exact_scan"
 	item.Supported = true
 	var err error
 	item.Entries, err = countMapKeys(m, info.KeySize, info.MaxEntries)

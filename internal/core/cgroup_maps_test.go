@@ -131,6 +131,21 @@ func TestMapOccupancyStatusIgnoresNonApplicableMaps(t *testing.T) {
 	}
 }
 
+func TestMapMetadataDistinguishesAssignmentOwnership(t *testing.T) {
+	assignment := metadataForMapName("sb_tc_assign")
+	if assignment.category != MapCategoryRuntime || assignment.evictionMode != mapEvictionNone || !assignment.admissionCritical {
+		t.Fatalf("assignment metadata = %+v, want retained admission-critical runtime state", assignment)
+	}
+	cache := metadataForMapName("sb_tc_rfrag")
+	if cache.evictionMode != mapEvictionLRUSafeCache || cache.admissionCritical {
+		t.Fatalf("auxiliary metadata = %+v, want safe LRU cache", cache)
+	}
+	policy := metadataForMapName("sb_tc_uid")
+	if policy.category != MapCategoryConfiguredPolicy || policy.evictionMode != mapEvictionNone {
+		t.Fatalf("policy metadata = %+v, want configured non-evicting policy", policy)
+	}
+}
+
 func TestUDPReleasePathDiagnosticsReportsFallback(t *testing.T) {
 	backend := &CgroupBackend{runtime: &cgroupRuntime{
 		enable_udp:                  true,

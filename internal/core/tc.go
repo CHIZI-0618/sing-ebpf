@@ -180,13 +180,17 @@ type TCAssignmentSweepResult struct {
 	// completed (or is a normal partial traversal).
 	Failure    string
 	FailureMap string
+	Missing    uint32
+	Superseded uint32
+	InFlight   uint32
 }
 
 const (
-	TCAssignmentSweepFailureClosed = "closed"
-	TCAssignmentSweepFailureScan   = "scan"
-	TCAssignmentSweepFailureLookup = "lookup"
-	TCAssignmentSweepFailureDelete = "delete"
+	TCAssignmentSweepFailureClosed     = "closed"
+	TCAssignmentSweepFailureScan       = "scan"
+	TCAssignmentSweepFailureLookup     = "lookup"
+	TCAssignmentSweepFailureDelete     = "delete"
+	TCAssignmentSweepFailureRetirement = "retirement_failed"
 )
 
 type tcAssignmentSweepEntry struct {
@@ -822,12 +826,18 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 		var current TCAssignment
 		if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&current)); err != nil {
 			if errors.Is(err, unix.ENOENT) {
+				result.Missing++
 				continue
 			}
 			result.Failure = TCAssignmentSweepFailureLookup
 			return result, err
 		}
-		if current != candidate.value {
+		if current.Generation != candidate.value.Generation || !sameTCAssignment(current, candidate.value) {
+			result.Superseded++
+			continue
+		}
+		if current.LastSeenNS > staleBefore {
+			result.InFlight++
 			continue
 		}
 		if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
