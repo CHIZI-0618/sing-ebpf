@@ -131,12 +131,20 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
 			.socket_cookie = cookie, .generation = assignment.generation,
 		};
 		struct sb_tc_assignment_claim *existing_claim = map_lookup(&tc_assignment_claim, flow);
+		bool claim_owned = existing_claim != 0 &&
+			existing_claim->socket_cookie == claim.socket_cookie &&
+			existing_claim->generation == claim.generation;
 		if (existing_claim == 0) {
-			if (map_update(&tc_assignment_claim, flow, &claim, BPF_NOEXIST) != 0)
+			if (map_update(&tc_assignment_claim, flow, &claim, BPF_NOEXIST) == 0) {
+				claim_owned = true;
+			} else {
 				existing_claim = map_lookup(&tc_assignment_claim, flow);
+				claim_owned = existing_claim != 0 &&
+					existing_claim->socket_cookie == claim.socket_cookie &&
+					existing_claim->generation == claim.generation;
+			}
 		}
-		if (existing_claim == 0 || existing_claim->socket_cookie != claim.socket_cookie ||
-			existing_claim->generation != claim.generation) {
+		if (!claim_owned) {
 			increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
 			return TC_ACT_SHOT;
 		}
