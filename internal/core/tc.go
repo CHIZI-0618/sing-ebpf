@@ -84,6 +84,7 @@ const (
 const (
 	tcListenerTCP4 = iota
 	tcListenerTCP6
+	tcListenerCount
 )
 
 const (
@@ -229,6 +230,9 @@ type TCBackend struct {
 	returnReferences           map[tcReturnReference]uint32
 	returnSweepScratch         mapScanScratch[tcAssignKey, tcReturnValue]
 	returnFragmentSweepScratch mapScanScratch[tcAssignKey, tcReturnValue]
+	// tcpListenerModes records, per listener family, whether the registered
+	// listener is in the SOCKMAP or is found by port because it is MPTCP.
+	tcpListenerModes [tcListenerCount]uint8
 }
 
 func PrepareTC(config TCConfig) (*TCBackend, error) {
@@ -594,9 +598,19 @@ func (b *TCBackend) SetDeliveryInterface(interfaceIndex uint32, hardwareAddress 
 	return nil
 }
 
-// RegisterTCPListener must precede exposing/attaching any program. An actual
-// listener rejection can select direct lookup even when a synthetic probe or
-// SOCKMAP creation succeeded (socket protocol and namespace both matter).
+const (
+	tcListenerUnregistered = iota
+	tcListenerInSockmap
+	tcListenerByPort
+)
+
+// RegisterTCPListener places a plain TCP listener in the SOCKMAP. A SOCKMAP
+// rejects MPTCP sockets, which Go listeners use by default since Go 1.24, so
+// an MPTCP listener is left out of it and the programs find its TCP subflow
+// listener by port instead; that requires a wildcard bind. Registration must
+// precede exposing/attaching any program. Any other listener rejection can
+// still select direct lookup even when a synthetic probe or SOCKMAP creation
+// succeeded (socket protocol and namespace both matter).
 func (b *TCBackend) RegisterTCPListener(ipv6 bool, fd int) error {
 	b.access.Lock()
 	defer b.access.Unlock()
@@ -614,7 +628,17 @@ func (b *TCBackend) RegisterTCPListener(ipv6 bool, fd int) error {
 	if err := b.requireUsableLocked(); err != nil {
 		return err
 	}
-	if err := updateMap(b.runtime.maps["tc_listener_sockets"].FD(), unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
+	listenerMapFD := b.runtime.maps["tc_listener_sockets"].FD()
+	if protocol, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL); err == nil && protocol == unix.IPPROTO_MPTCP {
+		// Deleting an empty SOCKMAP slot reports EINVAL rather than ENOENT.
+		if err = deleteMap(listenerMapFD, unsafe.Pointer(&key)); err != nil &&
+			!errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EINVAL) {
+			return E.Cause(err, "unregister previous TC eBPF TCP listener")
+		}
+		b.tcpListenerModes[key] = tcListenerByPort
+		return nil
+	}
+	if err := updateMap(listenerMapFD, unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
 		if errors.Is(err, unix.EOPNOTSUPP) && !b.programsExposed && b.control.Enabled == 0 {
 			if fallbackErr := b.useDirectTCPListenersLocked(); fallbackErr == nil {
 				return nil
@@ -624,6 +648,7 @@ func (b *TCBackend) RegisterTCPListener(ipv6 bool, fd int) error {
 		}
 		return E.Cause(err, "register TC eBPF TCP listener")
 	}
+	b.tcpListenerModes[key] = tcListenerInSockmap
 	return nil
 }
 
@@ -653,13 +678,31 @@ func (b *TCBackend) useDirectTCPListenersLocked() error {
 	return closeErr
 }
 
+// TCPListenerLookupMode reports "sockmap" or "direct", or "mixed" when one
+// registered listener family is in the SOCKMAP and the other is found by port.
 func (b *TCBackend) TCPListenerLookupMode() string {
 	b.access.RLock()
 	defer b.access.RUnlock()
-	if b.tcpListenerMap {
+	if !b.tcpListenerMap {
+		return "direct"
+	}
+	var inSockmap, byPort bool
+	for _, mode := range b.tcpListenerModes {
+		switch mode {
+		case tcListenerInSockmap:
+			inSockmap = true
+		case tcListenerByPort:
+			byPort = true
+		}
+	}
+	switch {
+	case byPort && inSockmap:
+		return "mixed"
+	case byPort:
+		return "direct"
+	default:
 		return "sockmap"
 	}
-	return "direct"
 }
 
 func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.AddrPort, interfaceIndex uint32, remove bool) (TCAssignment, error) {

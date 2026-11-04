@@ -47,27 +47,31 @@ func TestTCIsolatedRoundTripIntegration(t *testing.T) {
 				continue
 			}
 			for _, ipv6 := range []bool{false, true} {
-				t.Run(fmt.Sprintf("raw_ip=%v/shared=%v/ipv6=%v", rawIP, shared, ipv6), func(t *testing.T) {
-					testTCIsolatedRoundTrip(t, rawIP, shared, ipv6, false, false)
-				})
+				// A plain TCP listener is placed in the SOCKMAP; an MPTCP
+				// listener cannot be and is found by port instead.
+				for _, mptcp := range []bool{false, true} {
+					t.Run(fmt.Sprintf("raw_ip=%v/shared=%v/ipv6=%v/mptcp=%v", rawIP, shared, ipv6, mptcp), func(t *testing.T) {
+						testTCIsolatedRoundTrip(t, rawIP, shared, ipv6, false, false, mptcp)
+					})
+				}
 			}
 		}
 	}
 }
 
 func TestTCIsolatedExistingSNATIntegration(t *testing.T) {
-	testTCIsolatedRoundTrip(t, false, true, false, true, false)
+	testTCIsolatedRoundTrip(t, false, true, false, true, false, true)
 }
 
 func TestTCIsolatedListenerPortCollisionIntegration(t *testing.T) {
 	for _, ipv6 := range []bool{false, true} {
 		t.Run(fmt.Sprint(ipv6), func(t *testing.T) {
-			testTCIsolatedRoundTrip(t, false, true, ipv6, false, true)
+			testTCIsolatedRoundTrip(t, false, true, ipv6, false, true, true)
 		})
 	}
 }
 
-func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listenerPortCollision bool) {
+func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listenerPortCollision, mptcp bool) {
 	enterTestNetworkNamespace(t)
 	var host, peer netlink.Link
 	if rawIP {
@@ -147,6 +151,7 @@ func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listener
 	}
 	defer n.Close()
 	config := isolatedTestListenConfig(ipv6)
+	config.SetMultipathTCP(mptcp)
 	var tcp net.Listener
 	var udp net.PacketConn
 	var port int
@@ -178,6 +183,7 @@ func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listener
 		t.Fatal(err)
 	}
 	defer backend.Close()
+	sockmapBackend := backend.TCPListenerLookupMode() == "sockmap"
 	raw, _ := tcp.(*net.TCPListener).SyscallConn()
 	var registerErr error
 	var listenerProtocol int
@@ -188,8 +194,18 @@ func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listener
 		t.Fatal(err)
 	}
 	t.Logf("TCP listener protocol=%d lookup=%s", listenerProtocol, backend.TCPListenerLookupMode())
+	if mptcp && listenerProtocol != unix.IPPROTO_MPTCP {
+		t.Skip("the kernel does not provide MPTCP listeners")
+	}
 	if registerErr != nil {
 		t.Fatal(registerErr)
+	}
+	wantMode := "direct"
+	if sockmapBackend && !mptcp {
+		wantMode = "sockmap"
+	}
+	if mode := backend.TCPListenerLookupMode(); mode != wantMode {
+		t.Fatalf("listener lookup mode = %q, want %q", mode, wantMode)
 	}
 	localInterface := host.Attrs().Name
 	var sharedInterfaces []string

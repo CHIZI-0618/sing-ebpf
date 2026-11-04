@@ -152,8 +152,10 @@ the map can itself fault affected kernels, so the safety deny-list and positive
 BTF evidence are kept separate from ordinary capability selection.
 
 Current important fallbacks include TCX → owned `clsact`, SOCKMAP-capable TCP →
-legacy TCP lookup, a listener the SOCKMAP rejects (an MPTCP listener, the Go
-default since Go 1.24) → direct listener lookup selected at registration,
+legacy TCP lookup, an MPTCP TCP listener (the Go default since Go 1.24, which a
+SOCKMAP rejects) → listener lookup by port for that family only, which needs a
+wildcard bind, any other listener the SOCKMAP rejects → direct listener lookup
+selected at registration,
 cgroup socket-release notification → bounded LRU cleanup,
 socket-release probe permission denial → the same bounded LRU cleanup, and
 cgroup multi-program → compatible legacy exclusive attachment, and a root hook
@@ -246,7 +248,8 @@ is evicted at the bound instead of accumulating unbounded state.
 
 `runtime.TCRuntime.TCDiagnostics` is a request-driven, value-only snapshot of
 the effective TC socket-assignment runtime. It reports the actual TCX/clsact
-attachment mode (including `mixed`), SOCKMAP versus direct listener lookup,
+attachment mode (including `mixed`), SOCKMAP versus direct listener lookup
+(`mixed` when one listener family is found by port),
 delivery interface and policy-routing values, active and retired resource
 counts, priority, and whether the backend requires a rebuild. It does not
 expose maps, programs, links, file descriptors, or netlink objects.

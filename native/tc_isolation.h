@@ -143,7 +143,7 @@ INLINE int isolated_delivery(struct __sk_buff *skb, bool legacy, bool udp_only) 
             true, false, &flow, mac, 0) != SB_TC_PARSE_FLOW) return TC_ACT_SHOT;
     struct bpf_sock *socket;
     if (!udp_only && flow.protocol == IPPROTO_TCP_VALUE) {
-        socket = legacy ? lookup_tcp_socket_legacy(skb, control, &flow) : lookup_tcp_socket(skb, &flow);
+        socket = legacy ? lookup_tcp_socket_legacy(skb, control, &flow) : lookup_tcp_socket(skb, control, &flow);
     } else {
         // Lookup the private UDP listener at loopback, not at the original
         // remote address. This changes only the lookup key, never the packet.
