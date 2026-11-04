@@ -196,10 +196,10 @@ NOINLINE int ingress_ipv4(
         return shared_ingress_pass();
     }
     bool respect_source = port_policy == SB_SHARED_POLICY_RESPECT_SOURCE;
-    bool cached = load_cached_token(scratch);
+    __u32 tcp_sequence = 0U;
+    bool initial_syn = initial_tcp_syn(protocol, ports, data_end, &tcp_sequence);
+    bool cached = load_cached_token(scratch, initial_syn);
     if (!cached && port_policy != SB_SHARED_POLICY_PROXY) {
-        __u32 tcp_sequence = 0U;
-        bool initial_syn = initial_tcp_syn(protocol, ports, data_end, &tcp_sequence);
         if (!respect_source && load_cached_bypass(scratch, control, protocol, initial_syn, tcp_sequence)) {
             return shared_ingress_pass();
         }
@@ -416,10 +416,10 @@ NOINLINE int ingress_ipv6(
         return shared_ingress_pass();
     }
     bool respect_source = port_policy == SB_SHARED_POLICY_RESPECT_SOURCE;
-    bool cached = load_cached_token(scratch);
+    __u32 tcp_sequence = 0U;
+    bool initial_syn = initial_tcp_syn(protocol, ports, data_end, &tcp_sequence);
+    bool cached = load_cached_token(scratch, initial_syn);
     if (!cached && port_policy != SB_SHARED_POLICY_PROXY) {
-        __u32 tcp_sequence = 0U;
-        bool initial_syn = initial_tcp_syn(protocol, ports, data_end, &tcp_sequence);
         if (!respect_source && load_cached_bypass(scratch, control, protocol, initial_syn, tcp_sequence)) {
             return shared_ingress_pass();
         }

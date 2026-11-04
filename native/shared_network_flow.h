@@ -167,15 +167,22 @@ NOINLINE bool reserve_token(
     return result == SB_SHARED_TOKEN_RESERVED;
 }
 
-INLINE bool load_cached_token(struct sb_shared_scratch *scratch) {
+// TCP traffic does not refresh a flow's activity time, so a TCP flow's
+// last_seen_ns only moves when an initial SYN reuses it: a client opening a
+// new connection from the tuple of one that just closed. Userspace compares it
+// with the time it released the flow, so the delayed release of the closed
+// connection does not delete the flow the new connection now uses.
+INLINE bool load_cached_token(struct sb_shared_scratch *scratch, bool initial_syn) {
     struct sb_shared_token_value *existing = map_lookup(
         &shared_flow_by_original,
         &scratch->original);
     if (existing == 0) return false;
-    __builtin_memcpy(&scratch->token, existing, sizeof(scratch->token));
     if (scratch->original.protocol != IPPROTO_TCP_VALUE) {
         refresh_activity_timestamp(&existing->last_seen_ns, ktime_get_ns());
+    } else if (initial_syn) {
+        existing->last_seen_ns = ktime_get_ns();
     }
+    __builtin_memcpy(&scratch->token, existing, sizeof(scratch->token));
     return true;
 }
 

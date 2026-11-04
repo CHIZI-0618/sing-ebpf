@@ -259,12 +259,20 @@ func (b *SharedPacketRewriteBackend) ReleaseFlow(flow *SharedPacketRewriteFlowHa
 	return err
 }
 
+// sharedTCPFlowRelease is a closed TCP flow waiting out its release grace.
+// releasedNS is the monotonic release time, the clock of the kernel's
+// last_seen_ns; a later last_seen_ns means a new connection reused the flow.
+type sharedTCPFlowRelease struct {
+	deadline   time.Time
+	releasedNS uint64
+}
+
 func (b *SharedPacketRewriteBackend) deferTCPFlowReleaseLocked(flow SharedPacketRewriteFlowHandle, now time.Time) {
 	if b.flowReleases == nil {
-		b.flowReleases = make(map[SharedPacketRewriteFlowHandle]time.Time)
+		b.flowReleases = make(map[SharedPacketRewriteFlowHandle]sharedTCPFlowRelease)
 	}
 	deadline := now.Add(sharedNetworkTCPReleaseGrace)
-	b.flowReleases[flow] = deadline
+	b.flowReleases[flow] = sharedTCPFlowRelease{deadline: deadline, releasedNS: monotonicNowNS()}
 	if b.flowReleaseDeadline.IsZero() || deadline.Before(b.flowReleaseDeadline) {
 		b.flowReleaseDeadline = deadline
 	}
@@ -310,6 +318,26 @@ func (b *SharedPacketRewriteBackend) validateFlowGenerationLocked(flow SharedPac
 		return E.Cause(unix.ENOENT, "shared-network flow generation changed")
 	}
 	return nil
+}
+
+// deleteReleasedFlowLocked deletes a flow whose release grace expired unless an
+// initial SYN reused it after the release. That connection reaches userspace as
+// a new flow reference on accept; deleting the flow first would leave it with
+// no redirect state.
+func (b *SharedPacketRewriteBackend) deleteReleasedFlowLocked(flow SharedPacketRewriteFlowHandle, releasedNS uint64) (bool, error) {
+	var current sharedNetworkTokenValue
+	err := lookupMap(
+		int(b.runtime.flow_by_original_map_fd),
+		unsafe.Pointer(&flow.originalKey),
+		unsafe.Pointer(&current),
+	)
+	if err == nil && current.Generation == flow.generation && releasedNS != 0 && current.LastSeenNS > releasedNS {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return false, err
+	}
+	return b.deleteFlowGenerationLocked(flow)
 }
 
 func (b *SharedPacketRewriteBackend) deleteFlowGenerationLocked(flow SharedPacketRewriteFlowHandle) (bool, error) {
@@ -385,7 +413,8 @@ func (b *SharedPacketRewriteBackend) FlushReleasedTCPFlows(now time.Time, budget
 	var flushErr error
 	var earliest time.Time
 	budgetExhausted := false
-	for flow, deadline := range b.flowReleases {
+	for flow, release := range b.flowReleases {
+		deadline := release.deadline
 		if processed >= budget {
 			budgetExhausted = true
 			break
@@ -402,7 +431,7 @@ func (b *SharedPacketRewriteBackend) FlushReleasedTCPFlows(now time.Time, budget
 			continue
 		}
 		delete(b.flowReleases, flow)
-		flowRemoved, err := b.deleteFlowGenerationLocked(flow)
+		flowRemoved, err := b.deleteReleasedFlowLocked(flow, release.releasedNS)
 		if err != nil {
 			flushErr = E.Errors(flushErr, err)
 			continue

@@ -15,7 +15,7 @@ func TestSharedNetworkCloseClearsFlowBookkeeping(t *testing.T) {
 	backend := &SharedPacketRewriteBackend{
 		runtime:             &sharedPacketRewriteRuntime{control_map_fd: -1},
 		flowReferences:      map[SharedPacketRewriteFlowHandle]uint32{flow: 1},
-		flowReleases:        map[SharedPacketRewriteFlowHandle]time.Time{flow: time.Now()},
+		flowReleases:        map[SharedPacketRewriteFlowHandle]sharedTCPFlowRelease{flow: {deadline: time.Now()}},
 		flowReleaseDeadline: time.Now(),
 		flowSweepCandidates: []sharedNetworkFlowEntry{{}},
 		flowSweepRemoved:    1,

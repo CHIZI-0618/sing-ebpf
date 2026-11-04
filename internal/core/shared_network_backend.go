@@ -50,7 +50,7 @@ type SharedPacketRewriteBackend struct {
 	flowAccess          sync.Mutex
 	replyTokenSequence  atomic.Uint64
 	flowReferences      map[SharedPacketRewriteFlowHandle]uint32
-	flowReleases        map[SharedPacketRewriteFlowHandle]time.Time
+	flowReleases        map[SharedPacketRewriteFlowHandle]sharedTCPFlowRelease
 	flowReleaseDeadline time.Time
 	flowWake            chan struct{}
 	flowSweepAccess     sync.Mutex
