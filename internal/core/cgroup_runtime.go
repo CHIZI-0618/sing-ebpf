@@ -143,6 +143,21 @@ func (b *CgroupBackend) CgroupPath() string {
 	return b.cgroupPath
 }
 
+// PeerDestinationRestoreSupported reports whether the selected cgroup
+// getpeername hook is available for the address family.  The hook is an
+// optional compatibility enhancement: interception continues to work on
+// kernels that do not implement it, but redirected connected sockets then
+// expose the listener/token destination to userspace.
+func (b *CgroupBackend) PeerDestinationRestoreSupported(ipv6 bool) bool {
+	if b == nil || b.runtime == nil {
+		return false
+	}
+	if ipv6 {
+		return b.runtime.getpeername6_supported
+	}
+	return b.runtime.getpeername4_supported
+}
+
 // AttachModes returns the effective attach mechanism per loaded cgroup
 // program. It is a diagnostic snapshot only; it never probes or changes
 // attachments and therefore is safe to call from the request-driven API.

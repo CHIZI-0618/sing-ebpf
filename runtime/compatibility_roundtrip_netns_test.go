@@ -138,9 +138,15 @@ func testCompatibilityCgroupRoundTrip(t *testing.T, udp bool) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			// net fills RemoteAddr from getpeername after connect.
-			if peer := client.RemoteAddr().(*net.TCPAddr).AddrPort(); peer != netip.MustParseAddrPort(destination) {
-				t.Fatalf("getpeername reported %s, want %s", peer, destination)
+			// net fills RemoteAddr from getpeername after connect when the
+			// optional hook is available. Older kernels still provide a valid
+			// interception path, but expose the listener/token destination.
+			if backend.PeerDestinationRestoreSupported(v6) {
+				if peer := client.RemoteAddr().(*net.TCPAddr).AddrPort(); peer != netip.MustParseAddrPort(destination) {
+					t.Fatalf("getpeername reported %s, want %s", peer, destination)
+				}
+			} else {
+				t.Logf("getpeername%d hook unavailable; accepting legacy peer destination", map[bool]int{false: 4, true: 6}[v6])
 			}
 			_ = listener.(*net.TCPListener).SetDeadline(time.Now().Add(3 * time.Second))
 			server, err := listener.Accept()
@@ -181,11 +187,13 @@ func testCompatibilityCgroupUDPExchange(t *testing.T, backend *core.CgroupBacken
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if connected {
+	if connected && backend.PeerDestinationRestoreSupported(v6) {
 		// net fills RemoteAddr from getpeername after connect.
 		if peer := client.RemoteAddr().(*net.UDPAddr).AddrPort(); peer != remote.AddrPort() {
 			t.Fatalf("getpeername reported %s, want %s", peer, remote.AddrPort())
 		}
+	} else if connected {
+		t.Logf("getpeername%d hook unavailable; accepting legacy peer destination", map[bool]int{false: 4, true: 6}[v6])
 	}
 	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
 	_ = server.SetDeadline(time.Now().Add(3 * time.Second))
