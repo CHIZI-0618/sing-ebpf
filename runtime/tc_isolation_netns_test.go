@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -338,11 +340,63 @@ func testTCIsolatedRoundTrip(t *testing.T, rawIP, shared, ipv6, seeded, listener
 	if assignment, err := backend.LookupAssignment(commonEBPF.ProtocolTCP, netip.MustParseAddrPort(accepted.RemoteAddr().String()), netip.MustParseAddrPort(endpoint), 0, false); !errors.Is(err, unix.ENOENT) {
 		t.Fatalf("established TCP segments recreated the consumed assignment: %+v err=%v", assignment, err)
 	}
+	// The listener side closing first must not leave a TIME_WAIT socket for
+	// the tuple. A client reusing it would send a SYN that the delivery lookup
+	// assigns to that socket, and the kernel only recycles TIME_WAIT for a
+	// listener on the original destination port, which the transparent
+	// listener is not; under load the client then waits for its one-second
+	// SYN retransmission.
+	reusedAddress := tcpClient.LocalAddr().(*net.TCPAddr)
+	accepted.Close()
+	if _, err = tcpClient.Read(buffer); err != io.EOF {
+		t.Fatalf("TCP close: %v", err)
+	}
+	tcpClient.Close()
+	time.Sleep(50 * time.Millisecond)
+	if count := isolatedTimeWaitSockets(t, n, reusedAddress.Port); count != 0 {
+		t.Fatalf("%d TIME_WAIT sockets remain for %v in the namespace", count, reusedAddress)
+	}
+	var reused net.Conn
+	err = clientDo(func() error {
+		dialer := net.Dialer{Timeout: 3 * time.Second, LocalAddr: reusedAddress, Control: func(_, _ string, raw syscall.RawConn) error {
+			var setErr error
+			if err := raw.Control(func(fd uintptr) {
+				setErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+			}); err != nil {
+				return err
+			}
+			return setErr
+		}}
+		var err error
+		reused, err = dialer.Dial("tcp"+network, endpoint)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("TCP dial reusing %v: %v", reusedAddress, err)
+	}
+	defer reused.Close()
+	tcp.(*net.TCPListener).SetDeadline(time.Now().Add(3 * time.Second))
+	acceptedAgain, err := tcp.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer acceptedAgain.Close()
+	if acceptedAgain.RemoteAddr().String() != reusedAddress.String() {
+		t.Fatalf("reused TCP tuple changed: %v", acceptedAgain.RemoteAddr())
+	}
+	if _, err = backend.LookupAssignment(commonEBPF.ProtocolTCP, netip.MustParseAddrPort(acceptedAgain.RemoteAddr().String()), netip.MustParseAddrPort(endpoint), 0, true); err != nil {
+		t.Fatal(err)
+	}
 	if healthy, err := d.healthCheck(localInterface, sharedInterfaces, nil); err != nil || !healthy {
 		t.Fatalf("health=%v err=%v", healthy, err)
 	}
-	for _, fault := range []string{"mtu", "return_filter", "delivery_filter", "delivery_mac", "veth"} {
+	for _, fault := range []string{"mtu", "return_filter", "delivery_filter", "delivery_mac", "time_wait", "veth"} {
 		switch fault {
+		case "time_wait":
+			err = n.with(func() error {
+				_, err := setTCSysctl(tcNamespaceTimeWaitPath, "4096")
+				return err
+			})
 		case "mtu":
 			err = netlink.LinkSetMTU(host, 1280)
 		case "return_filter":
@@ -462,4 +516,34 @@ func seedIsolatedTestSNAT(t *testing.T, host netlink.Link, client net.Conn, remo
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("SNAT state was not established")
+}
+
+// isolatedTimeWaitSockets counts TIME_WAIT TCP sockets in the namespace whose
+// remote port is clientPort.
+func isolatedTimeWaitSockets(t *testing.T, n *TCNamespace, clientPort int) int {
+	t.Helper()
+	count := 0
+	err := n.with(func() error {
+		for _, table := range []string{"/proc/thread-self/net/tcp", "/proc/thread-self/net/tcp6"} {
+			content, err := os.ReadFile(table)
+			if err != nil {
+				return err
+			}
+			for _, line := range strings.Split(string(content), "\n")[1:] {
+				fields := strings.Fields(line)
+				if len(fields) < 4 || fields[3] != "06" {
+					continue
+				}
+				remote := fields[2]
+				if port, err := strconv.ParseUint(remote[strings.LastIndexByte(remote, ':')+1:], 16, 16); err == nil && int(port) == clientPort {
+					count++
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

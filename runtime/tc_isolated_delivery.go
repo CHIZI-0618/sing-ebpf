@@ -153,14 +153,31 @@ func (d *tcDeliveryLink) configureIsolatedPeer(repair bool) (bool, error) {
 			}
 		}
 	}
-	for _, setting := range []struct{ device, name, value string }{
-		{"all", "rp_filter", "0"}, {"default", "rp_filter", "0"},
-		{d.deliveryName, "rp_filter", "0"}, {d.deliveryName, "accept_local", "1"},
-		{d.deliveryName, "route_localnet", "1"},
+	for _, setting := range []struct {
+		path, value string
+		optional   bool
+	}{
+		{path: tcInterfaceSysctlPath("all", "rp_filter"), value: "0"}, {path: tcInterfaceSysctlPath("default", "rp_filter"), value: "0"},
+		{path: tcInterfaceSysctlPath(d.deliveryName, "rp_filter"), value: "0"}, {path: tcInterfaceSysctlPath(d.deliveryName, "accept_local"), value: "1"},
+		{path: tcInterfaceSysctlPath(d.deliveryName, "route_localnet"), value: "1"},
+		// The transparent listeners close first whenever the remote server
+		// does, so their sockets would enter TIME_WAIT. A client reusing that
+		// tuple then sends a SYN the delivery lookup assigns to the TIME_WAIT
+		// socket; the kernel only recycles one for a listener on the original
+		// destination port, which the transparent listener is not, so it drops
+		// the SYN and the client retries a second later. The namespace holds
+		// nothing but these sockets, so it keeps no TIME_WAIT state.
+		// Vendor kernels and minimal containers may omit or protect this
+		// namespace sysctl. The optimization is optional; the other delivery
+		// invariants remain mandatory.
+		{path: tcNamespaceTimeWaitPath, value: "0", optional: true},
 	} {
-		path := tcInterfaceSysctlPath(setting.device, setting.name)
+		path := setting.path
 		value, err := os.ReadFile(path)
 		if err != nil {
+			if setting.optional && tcOptionalSysctlUnavailable(err) {
+				continue
+			}
 			return false, err
 		}
 		if strings.TrimSpace(string(value)) == setting.value {
@@ -169,6 +186,9 @@ func (d *tcDeliveryLink) configureIsolatedPeer(repair bool) (bool, error) {
 		healthy = false
 		if repair {
 			if _, err = setTCSysctl(path, setting.value); err != nil {
+				if setting.optional && tcOptionalSysctlUnavailable(err) {
+					continue
+				}
 				return false, err
 			}
 		}
