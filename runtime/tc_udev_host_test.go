@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	commonEBPF "github.com/MiChongs/sing-ebpf"
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/netlink"
 )
 
