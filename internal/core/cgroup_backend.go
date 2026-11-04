@@ -87,6 +87,10 @@ type cgroupRuntime struct {
 	udp_release_observer        bool
 	udp_release_fallback_reason string
 	socket_release_supported    bool
+	// sk_storage binds peer restoration to the kernel socket lifetime. It is
+	// selected only when the optional map type and socket-release hook both
+	// exist; older Android/vendor kernels retain the cookie-map fallback.
+	sk_storage                  bool
 	// getpeername_supported reports Linux 5.8+ getpeername hooks. They are
 	// optional: without them a redirected socket reports its listener token
 	// as the peer, as before.
@@ -235,6 +239,7 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		}
 	}
 	socketReleaseSupported := false
+	skStorage := false
 	coarseTimeSupported := false
 	if config.EnableUDP {
 		coarseTimeSupported = features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil
@@ -243,6 +248,9 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 			closeCgroup()
 			return nil, eBPFOperationError("probe socket release attachment", err)
 		}
+	}
+	if socketReleaseSupported && features.HaveMapType(CiliumEBPF.SkStorage) == nil {
+		skStorage = true
 	}
 	runtimeState := &cgroupRuntime{
 		cgroupFile:               cgroupFile,
@@ -257,11 +265,23 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		bypass_ipv6_policy:       len(policy.localInitialBypass.ipv6) > 0,
 		bypass_port_policy:       len(policy.localBypassPortEntries) > 0,
 		socket_release_supported: socketReleaseSupported,
+		sk_storage:               skStorage,
 		coarse_time_supported:    coarseTimeSupported,
 		getpeername4_supported:   probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet4GetPeername),
 		getpeername6_supported:   probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet6GetPeername),
 	}
 	if err = prepareCgroupMaps(runtimeState, mapCapacity, len(uidPolicyEntries), len(policy.localBypassPortEntries), config.SelfBypassMap, policy.localForce); err != nil {
+		if runtimeState.sk_storage {
+			// Map-type probes are advisory on vendor kernels. Retry with the
+			// cookie-map object if SK_STORAGE creation or verifier support is
+			// incomplete despite the positive feature probe.
+			_ = closeMaps(runtimeState.maps)
+			runtimeState.maps = make(map[string]*CiliumEBPF.Map)
+			runtimeState.sk_storage = false
+			err = prepareCgroupMaps(runtimeState, mapCapacity, len(uidPolicyEntries), len(policy.localBypassPortEntries), config.SelfBypassMap, policy.localForce)
+		}
+	}
+	if err != nil {
 		_ = closeMaps(runtimeState.maps)
 		closeCgroup()
 		if errors.Is(err, unix.EPERM) {

@@ -63,7 +63,12 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 	normalSelections := selections
 	normalSlots := slots
 	loadSpec := loadCgroup
-	if b.runtime.coarse_time_supported {
+	if b.runtime.sk_storage {
+		loadSpec = loadCgroupStorage
+		if b.runtime.coarse_time_supported {
+			loadSpec = loadCgroupStorageCoarse
+		}
+	} else if b.runtime.coarse_time_supported {
 		loadSpec = loadCgroupCoarse
 	}
 	normalMaps := b.runtime.maps
@@ -77,7 +82,11 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 	}
 	if err != nil && b.runtime.coarse_time_supported && coarseTimeUnavailable(err) {
 		b.runtime.coarse_time_supported = false
-		loadSpec = loadCgroup
+		if b.runtime.sk_storage {
+			loadSpec = loadCgroupStorage
+		} else {
+			loadSpec = loadCgroup
+		}
 		loaded, err = loadObjectPrograms(loadSpec, normalMaps, normalSelections)
 	}
 	if err != nil {

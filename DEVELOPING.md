@@ -157,6 +157,9 @@ SOCKMAP rejects) → listener lookup by port for that family only, which needs a
 wildcard bind, any other listener the SOCKMAP rejects → direct listener lookup
 selected at registration,
 cgroup socket-release notification → bounded LRU cleanup,
+connected TCP/UDP peer state → non-cloned `BPF_MAP_TYPE_SK_STORAGE` when the
+kernel exposes both socket-release and socket-storage support, otherwise the
+cookie-keyed peer maps remain the compatibility path,
 socket-release probe permission denial → the same bounded LRU cleanup, and
 cgroup getpeername restoration → the original token-peer behavior when the
 optional hook is unavailable,

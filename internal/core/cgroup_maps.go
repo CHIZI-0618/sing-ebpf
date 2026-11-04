@@ -36,12 +36,10 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	overrides := map[string]mapSpecOverride{
 		"cgroup_control":           {name: "sb_cg_control", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"cgroup_tcp_redirect":      {name: "sb_cg_tcp", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity},
-		"cgroup_tcp_peer":          {name: "sb_cg_tcp_peer", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity},
 		"cgroup_udp_redirect":      {name: "sb_cg_udp", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},
 		"cgroup_udp_recovery":      {name: "sb_cg_recover", mapType: CiliumEBPF.LRUHash, maxEntries: recoveryCapacity},
 		"cgroup_udp_token":         {name: "sb_cg_token", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},
 		"cgroup_udp_token_reverse": {name: "sb_cg_token_rev", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},
-		"cgroup_udp_peer":          {name: "sb_cg_peer", mapType: udpLayout.peerType, maxEntries: udpLayout.peerCapacity, flags: udpLayout.peerFlags},
 		"cgroup_udp_flow":          {name: "sb_cg_flow", mapType: CiliumEBPF.LRUHash, maxEntries: udpLayout.flowCapacity},
 		"cgroup_socket_bypass":     {name: "sb_cg_sock_byp", mapType: CiliumEBPF.LRUHash, maxEntries: capacity.SocketBypass},
 		"cgroup_bypass_port":       {name: "sb_cg_byp_port", mapType: CiliumEBPF.Hash, maxEntries: max(uint32(localPortEntries), 1), flags: bpfFlagNoPrealloc},
@@ -56,6 +54,17 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		"cgroup_udp_release_stats": {
 			name: "sb_cg_rel_stat", mapType: CiliumEBPF.PerCPUArray, maxEntries: cgroupUDPReleaseStatsCount,
 		},
+	}
+	loadSpec := loadCgroup
+	if runtimeState.sk_storage {
+		overrides["cgroup_socket_peer_storage"] = mapSpecOverride{name: "sb_cg_sk_peer", mapType: CiliumEBPF.SkStorage}
+		loadSpec = loadCgroupStorage
+		if runtimeState.coarse_time_supported {
+			loadSpec = loadCgroupStorageCoarse
+		}
+	} else {
+		overrides["cgroup_tcp_peer"] = mapSpecOverride{name: "sb_cg_tcp_peer", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity}
+		overrides["cgroup_udp_peer"] = mapSpecOverride{name: "sb_cg_peer", mapType: udpLayout.peerType, maxEntries: udpLayout.peerCapacity, flags: udpLayout.peerFlags}
 	}
 	addForceMapOverrides(overrides, "cgroup", "sb_cg_force", force)
 	if selfBypassMap != nil {
@@ -77,14 +86,14 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		}
 	}
 	var err error
-	runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
+	runtimeState.maps, err = loadObjectMaps(loadSpec, overrides)
 	if err != nil && overrides["cgroup_udp_release_events"].mapType == CiliumEBPF.RingBuf {
 		runtimeState.udp_release_fallback_reason = "ringbuf_map_load_failed"
 		delete(overrides, "cgroup_udp_release_events")
 		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
 			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
 		}
-		runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
+		runtimeState.maps, err = loadObjectMaps(loadSpec, overrides)
 	}
 	if err != nil {
 		return err
@@ -121,7 +130,11 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	runtimeState.udp_recovery_map_fd = runtimeState.maps["cgroup_udp_recovery"].FD()
 	runtimeState.udp_token_map_fd = runtimeState.maps["cgroup_udp_token"].FD()
 	runtimeState.udp_token_reverse_map_fd = runtimeState.maps["cgroup_udp_token_reverse"].FD()
-	runtimeState.udp_peer_map_fd = runtimeState.maps["cgroup_udp_peer"].FD()
+	if peerMap := runtimeState.maps["cgroup_udp_peer"]; peerMap != nil {
+		runtimeState.udp_peer_map_fd = peerMap.FD()
+	} else {
+		runtimeState.udp_peer_map_fd = -1
+	}
 	runtimeState.udp_flow_map_fd = runtimeState.maps["cgroup_udp_flow"].FD()
 	runtimeState.bypass_socket_cookie_map_fd = runtimeState.maps["cgroup_socket_bypass"].FD()
 	runtimeState.uid_policy_map_fd = runtimeState.maps["cgroup_uid_policy"].FD()

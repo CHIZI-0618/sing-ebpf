@@ -99,7 +99,7 @@ func metadataForMapName(name string) mapMetadata {
 		metadata.evictionMode = mapEvictionLRUSafeCache
 	}
 	switch name {
-	case "sb_self_sockets", "sb_cg_sock_byp", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_udp", "sb_cg_token", "sb_cg_token_rev", "sb_cg_peer", "sb_tc_assign", "sb_tc_return", "sb_sh_orig", "sb_sh_token":
+	case "sb_self_sockets", "sb_cg_sock_byp", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_sk_peer", "sb_cg_udp", "sb_cg_token", "sb_cg_token_rev", "sb_cg_peer", "sb_tc_assign", "sb_tc_return", "sb_sh_orig", "sb_sh_token":
 		metadata.admissionCritical = true
 	}
 	return metadata

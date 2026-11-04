@@ -56,11 +56,23 @@ MAP(cgroup_udp_redirect, struct sb_ebpf_listener_key, struct sb_ebpf_original_ds
 MAP(cgroup_udp_recovery, struct sb_ebpf_listener_key, struct sb_ebpf_original_dst, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_udp_token, __u64, struct sb_ebpf_listener_key, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_token_reverse, struct sb_ebpf_listener_key, struct sb_ebpf_udp_token_reverse_value, BPF_MAP_TYPE_HASH);
+#ifndef SB_EBPF_USE_SK_STORAGE
 MAP(cgroup_udp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_HASH);
 // Original destination of each redirected TCP socket, by socket cookie, for
 // getpeername restoration.  TCP redirect entries are consumed when the
 // listener accepts the connection, so they cannot answer later queries.
 MAP(cgroup_tcp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_LRU_HASH);
+#else
+struct sb_ebpf_socket_peer_storage {
+    struct sb_ebpf_udp_peer_value peer;
+};
+struct bpf_map_def SEC("maps") cgroup_socket_peer_storage = {
+    .type = BPF_MAP_TYPE_SK_STORAGE,
+    .key_size = 0U,
+    .value_size = sizeof(struct sb_ebpf_socket_peer_storage),
+    .max_entries = 0U,
+};
+#endif
 MAP(cgroup_udp_flow, struct sb_ebpf_udp_flow_key, struct sb_ebpf_udp_flow_value, BPF_MAP_TYPE_LRU_HASH);
 /* Shared with the TC self-bypass owner. Do not silently evict live sockets. */
 MAP_FLAGS(cgroup_socket_bypass, __u64, __u32, BPF_MAP_TYPE_HASH, 16384U, BPF_F_NO_PREALLOC);
@@ -81,6 +93,10 @@ static long (*map_update)(void *map, const void *key, const void *value, __u64 f
     (void *)BPF_FUNC_map_update_elem;
 static long (*map_delete)(void *map, const void *key) = (void *)BPF_FUNC_map_delete_elem;
 static __u64 (*get_socket_cookie)(void *ctx) = (void *)BPF_FUNC_get_socket_cookie;
+#ifdef SB_EBPF_USE_SK_STORAGE
+static void *(*sk_storage_get)(void *map, void *sk, void *value, __u64 flags) =
+    (void *)BPF_FUNC_sk_storage_get;
+#endif
 static __u64 (*get_current_uid_gid)(void) = (void *)BPF_FUNC_get_current_uid_gid;
 static __u64 (*ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
 static long (*ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
@@ -488,7 +504,9 @@ INLINE void reset_connected_udp(__u64 cookie) {
         map_delete(&cgroup_udp_token_reverse, &listener);
         map_delete(&cgroup_udp_token, &cookie);
     }
+#ifndef SB_EBPF_USE_SK_STORAGE
     delete_present(&cgroup_udp_peer, &cookie);
+#endif
 }
 
 INLINE bool store_connected_udp_token(
@@ -500,7 +518,9 @@ INLINE bool store_connected_udp_token(
     if (previous != 0 && previous->socket_cookie != cookie) {
         __u64 previous_cookie = previous->socket_cookie;
         map_delete(&cgroup_udp_token, &previous_cookie);
+#ifndef SB_EBPF_USE_SK_STORAGE
         map_delete(&cgroup_udp_peer, &previous_cookie);
+#endif
     }
     if (map_update(&cgroup_udp_token, &cookie, listener, 0U) != 0) {
         increment_cgroup_stat(SB_CGROUP_STAT_UDP_TOKEN_FAILURE);
@@ -519,7 +539,7 @@ INLINE bool store_connected_udp_token(
     return true;
 }
 
-INLINE void store_udp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
+INLINE void store_udp_peer_v4(struct bpf_sock_addr *ctx, __u64 cookie, __u32 address, __u16 port) {
     if (cookie == 0U || address == 0U || port == 0U) return;
     struct sb_ebpf_udp_peer_value peer = {
         .family = AF_INET_VALUE,
@@ -527,11 +547,20 @@ INLINE void store_udp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
         .port = port,
     };
     __builtin_memcpy(peer.addr, &address, sizeof(address));
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 1U);
+    if (storage == 0) {
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
+        return;
+    }
+    __builtin_memcpy(&storage->peer, &peer, sizeof(peer));
+#else
     if (map_update(&cgroup_udp_peer, &cookie, &peer, 0U) != 0)
         increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
+#endif
 }
 
-INLINE void store_udp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) {
+INLINE void store_udp_peer_v6(struct bpf_sock_addr *ctx, __u64 cookie, const __u32 address[4], __u16 port) {
     if (cookie == 0U || port == 0U ||
         (address[0] | address[1] | address[2] | address[3]) == 0U) return;
     struct sb_ebpf_udp_peer_value peer = {
@@ -540,11 +569,20 @@ INLINE void store_udp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) 
         .port = port,
     };
     __builtin_memcpy(peer.addr, address, sizeof(peer.addr));
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 1U);
+    if (storage == 0) {
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
+        return;
+    }
+    __builtin_memcpy(&storage->peer, &peer, sizeof(peer));
+#else
     if (map_update(&cgroup_udp_peer, &cookie, &peer, 0U) != 0)
         increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
+#endif
 }
 
-INLINE void store_tcp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
+INLINE void store_tcp_peer_v4(struct bpf_sock_addr *ctx, __u64 cookie, __u32 address, __u16 port) {
     if (cookie == 0U) return;
     struct sb_ebpf_udp_peer_value peer = {
         .family = AF_INET_VALUE,
@@ -552,11 +590,20 @@ INLINE void store_tcp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
         .port = port,
     };
     __builtin_memcpy(peer.addr, &address, sizeof(address));
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 1U);
+    if (storage == 0) {
+        increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
+        return;
+    }
+    __builtin_memcpy(&storage->peer, &peer, sizeof(peer));
+#else
     if (map_update(&cgroup_tcp_peer, &cookie, &peer, 0U) != 0)
         increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
+#endif
 }
 
-INLINE void store_tcp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) {
+INLINE void store_tcp_peer_v6(struct bpf_sock_addr *ctx, __u64 cookie, const __u32 address[4], __u16 port) {
     if (cookie == 0U) return;
     struct sb_ebpf_udp_peer_value peer = {
         .family = AF_INET6_VALUE,
@@ -564,30 +611,56 @@ INLINE void store_tcp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) 
         .port = port,
     };
     __builtin_memcpy(peer.addr, address, sizeof(peer.addr));
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 1U);
+    if (storage == 0) {
+        increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
+        return;
+    }
+    __builtin_memcpy(&storage->peer, &peer, sizeof(peer));
+#else
     if (map_update(&cgroup_tcp_peer, &cookie, &peer, 0U) != 0)
         increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
+#endif
 }
 
-INLINE bool restore_udp_peer_v4(__u64 cookie, __u32 *address, __u16 *port) {
+INLINE bool restore_udp_peer_v4(struct bpf_sock_addr *ctx, __u64 cookie, __u32 *address, __u16 *port) {
     if (cookie == 0U || (*address != 0U && *port != 0U)) return false;
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 0U);
+    if (storage == 0 || storage->peer.family != AF_INET_VALUE || storage->peer.protocol != UDP_VALUE) return false;
+    __builtin_memcpy(address, storage->peer.addr, sizeof(*address));
+    *port = storage->peer.port;
+    return true;
+#else
     struct sb_ebpf_udp_peer_value *peer = map_lookup(&cgroup_udp_peer, &cookie);
     if (peer == 0 || peer->family != AF_INET_VALUE || peer->protocol != UDP_VALUE) return false;
     __builtin_memcpy(address, peer->addr, sizeof(*address));
     *port = peer->port;
     return true;
+#endif
 }
 
-INLINE bool restore_udp_peer_v6(__u64 cookie, __u32 address[4], __u16 *port) {
+INLINE bool restore_udp_peer_v6(struct bpf_sock_addr *ctx, __u64 cookie, __u32 address[4], __u16 *port) {
     if (cookie == 0U ||
         ((address[0] | address[1] | address[2] | address[3]) != 0U && *port != 0U)) return false;
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 0U);
+    if (storage == 0 || storage->peer.family != AF_INET6_VALUE || storage->peer.protocol != UDP_VALUE) return false;
+    __builtin_memcpy(address, storage->peer.addr, sizeof(storage->peer.addr));
+    *port = storage->peer.port;
+    return true;
+#else
     struct sb_ebpf_udp_peer_value *peer = map_lookup(&cgroup_udp_peer, &cookie);
     if (peer == 0 || peer->family != AF_INET6_VALUE || peer->protocol != UDP_VALUE) return false;
     __builtin_memcpy(address, peer->addr, sizeof(peer->addr));
     *port = peer->port;
     return true;
+#endif
 }
 
 INLINE bool restore_udp_peer_for_empty_v6(
+    struct bpf_sock_addr *ctx,
     __u64 cookie,
     __u32 address[4],
     __u16 *port) {
@@ -595,8 +668,14 @@ INLINE bool restore_udp_peer_for_empty_v6(
         (address[0] | address[1] | address[2] | address[3]) != 0U || *port != 0U) {
         return false;
     }
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 0U);
+    if (storage == 0 || storage->peer.protocol != UDP_VALUE) return false;
+    const struct sb_ebpf_udp_peer_value *peer = &storage->peer;
+#else
     struct sb_ebpf_udp_peer_value *peer = map_lookup(&cgroup_udp_peer, &cookie);
     if (peer == 0 || peer->protocol != UDP_VALUE) return false;
+#endif
     if (peer->family == AF_INET_VALUE) {
         address[0] = 0U;
         address[1] = 0U;
@@ -638,7 +717,7 @@ INLINE int handle_v4(
     }
     bool connected_udp = connect_hook && protocol == UDP_VALUE;
     if (!connect_hook && (destination == 0U || port == 0U)) {
-        (void)restore_udp_peer_v4(cookie, &destination, &port);
+        (void)restore_udp_peer_v4(ctx, cookie, &destination, &port);
     }
     if (service_port(protocol, port)) return 1;
     __u8 destination_bytes[4];
@@ -651,7 +730,7 @@ INLINE int handle_v4(
     if (!force_intercept && (action & ~SB_PORT_AFTER_SELECTORS) == SB_PORT_PASS) return 1;
     if (connected_udp) {
         reset_connected_udp(cookie);
-        store_udp_peer_v4(cookie, destination, port);
+        store_udp_peer_v4(ctx, cookie, destination, port);
     }
     __u8 flow_address[16] = {0};
     __builtin_memcpy(flow_address, &destination, sizeof(destination));
@@ -691,7 +770,7 @@ INLINE int handle_v4(
             cookie, SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
     if (connected_udp) watch_udp_release(config, cookie);
-    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(cookie, destination, port);
+    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(ctx, cookie, destination, port);
     return rewrite_v4(ctx, &listener) ? 1 : 0;
 }
 
@@ -721,7 +800,7 @@ INLINE int handle_v6(
     bool missing_destination =
         (address[0] | address[1] | address[2] | address[3]) == 0U || port == 0U;
     if (!connect_hook && restore_connected_token(ctx, cookie, true, missing_destination)) return 1;
-    if (!connect_hook) (void)restore_udp_peer_for_empty_v6(cookie, address, &port);
+    if (!connect_hook) (void)restore_udp_peer_for_empty_v6(ctx, cookie, address, &port);
     bool connected_udp = connect_hook && protocol == UDP_VALUE;
     bool mapped = ipv4_mapped(address);
     if (mapped) {
@@ -729,7 +808,7 @@ INLINE int handle_v6(
         __u32 destination;
         __builtin_memcpy(&destination, ((__u8 *)address) + 12U, sizeof(destination));
         if (!connect_hook && (destination == 0U || port == 0U)) {
-            (void)restore_udp_peer_v4(cookie, &destination, &port);
+            (void)restore_udp_peer_v4(ctx, cookie, &destination, &port);
         }
         if (service_port(protocol, port)) return 1;
         __u8 destination_bytes[4];
@@ -742,7 +821,7 @@ INLINE int handle_v6(
         if (!force_intercept && (action & ~SB_PORT_AFTER_SELECTORS) == SB_PORT_PASS) return 1;
         if (connected_udp) {
             reset_connected_udp(cookie);
-            store_udp_peer_v4(cookie, destination, port);
+            store_udp_peer_v4(ctx, cookie, destination, port);
         }
         __u8 flow_address[16] = {0};
         __builtin_memcpy(flow_address, &destination, sizeof(destination));
@@ -779,12 +858,12 @@ INLINE int handle_v6(
                 SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
         }
         if (connected_udp) watch_udp_release(config, cookie);
-        if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(cookie, destination, port);
+        if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(ctx, cookie, destination, port);
         return rewrite_v4_mapped(ctx, &listener) ? 1 : 0;
     }
     if (!enable_native_ipv6) return 1;
     if ((config->flags & SB_EBPF_CGROUP_FLAG_IPV6) == 0U) return 1;
-    if (!connect_hook) (void)restore_udp_peer_v6(cookie, address, &port);
+    if (!connect_hook) (void)restore_udp_peer_v6(ctx, cookie, address, &port);
     if (service_port(protocol, port)) return 1;
     if (sb_ebpf_ipv6_safety_bypass((const __u8 *)address)) return 1;
     // Another backend sharing this socket's cgroup hooks already redirected it.
@@ -796,7 +875,7 @@ INLINE int handle_v6(
     if (!force_intercept && (action & ~SB_PORT_AFTER_SELECTORS) == SB_PORT_PASS) return 1;
     if (connected_udp) {
         reset_connected_udp(cookie);
-        store_udp_peer_v6(cookie, address, port);
+        store_udp_peer_v6(ctx, cookie, address, port);
     }
     __u8 flow_address[16];
     __builtin_memcpy(flow_address, address, sizeof(flow_address));
@@ -833,7 +912,7 @@ INLINE int handle_v6(
             SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
     if (connected_udp) watch_udp_release(config, cookie);
-    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v6(cookie, address, port);
+    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v6(ctx, cookie, address, port);
     return rewrite_v6(ctx, &listener) ? 1 : 0;
 }
 
@@ -925,6 +1004,11 @@ SEC("cgroup/recvmsg6_mapped") int sb_ebpf_urcv6_mapped_c(struct bpf_sock_addr *c
 INLINE const struct sb_ebpf_udp_peer_value *redirected_peer(struct bpf_sock_addr *ctx, __u8 family) {
     __u64 cookie = get_socket_cookie(ctx);
     if (cookie == 0U) return 0;
+#ifdef SB_EBPF_USE_SK_STORAGE
+    struct sb_ebpf_socket_peer_storage *storage = sk_storage_get(&cgroup_socket_peer_storage, ctx->sk, 0, 0U);
+    if (storage == 0 || storage->peer.family != family) return 0;
+    return &storage->peer;
+#else
     const struct sb_ebpf_udp_peer_value *peer;
     if (ctx->protocol == TCP_VALUE) {
         peer = map_lookup(&cgroup_tcp_peer, &cookie);
@@ -935,6 +1019,7 @@ INLINE const struct sb_ebpf_udp_peer_value *redirected_peer(struct bpf_sock_addr
     }
     if (peer == 0 || peer->family != family) return 0;
     return peer;
+#endif
 }
 
 INLINE int peer_v4(struct bpf_sock_addr *ctx) {
@@ -1017,8 +1102,10 @@ INLINE int release_socket_cookie(__u64 cookie, __u64 released_at_ns) {
     }
     // Every socket in the cgroup is released through here, and only connected
     // UDP and self-bypass sockets own these entries.
+#ifndef SB_EBPF_USE_SK_STORAGE
     delete_present(&cgroup_udp_peer, &cookie);
     delete_present(&cgroup_tcp_peer, &cookie);
+#endif
     delete_present(&cgroup_socket_bypass, &cookie);
     return 1;
 }

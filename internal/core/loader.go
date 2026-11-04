@@ -85,6 +85,10 @@ var loadTC = BPFGen.LoadTC
 
 var loadCgroup = BPFGen.LoadCgroup
 
+var loadCgroupStorage = BPFGen.LoadCgroupStorage
+
+var loadCgroupStorageCoarse = BPFGen.LoadCgroupStorageCoarse
+
 var loadCgroupCoarse = BPFGen.LoadCgroupCoarse
 
 var loadSharedNetwork = BPFGen.LoadSharedNetwork
@@ -264,7 +268,7 @@ func loadObjectMaps(
 		if err = validateKernelObjectName(override.name); err != nil {
 			return nil, E.Cause(err, "invalid eBPF map override for ", name)
 		}
-		if override.mapType == CiliumEBPF.UnspecifiedMap || override.maxEntries == 0 {
+		if override.mapType == CiliumEBPF.UnspecifiedMap || (override.maxEntries == 0 && override.mapType != CiliumEBPF.SkStorage) {
 			return nil, E.New("invalid eBPF map override for ", name)
 		}
 		mapSpec.Name = override.name
