@@ -17,6 +17,7 @@ import (
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
 	TCMapTcAssignment                            = "tc_assignment"
+	TCMapTcAssignmentClaim                       = "tc_assignment_claim"
 	TCMapTcControl                               = "tc_control"
 	TCMapTcExcludeSourceIpv4                     = "tc_exclude_source_ipv4"
 	TCMapTcExcludeSourceIpv6                     = "tc_exclude_source_ipv6"
@@ -113,6 +114,7 @@ type TCProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type TCMapSpecs struct {
 	TcAssignment        *ebpf.MapSpec `ebpf:"tc_assignment"`
+	TcAssignmentClaim   *ebpf.MapSpec `ebpf:"tc_assignment_claim"`
 	TcControl           *ebpf.MapSpec `ebpf:"tc_control"`
 	TcExcludeSourceIpv4 *ebpf.MapSpec `ebpf:"tc_exclude_source_ipv4"`
 	TcExcludeSourceIpv6 *ebpf.MapSpec `ebpf:"tc_exclude_source_ipv6"`
@@ -167,6 +169,7 @@ func (o *TCObjects) Close() error {
 // It can be passed to LoadTCObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TCMaps struct {
 	TcAssignment        *ebpf.Map `ebpf:"tc_assignment"`
+	TcAssignmentClaim   *ebpf.Map `ebpf:"tc_assignment_claim"`
 	TcControl           *ebpf.Map `ebpf:"tc_control"`
 	TcExcludeSourceIpv4 *ebpf.Map `ebpf:"tc_exclude_source_ipv4"`
 	TcExcludeSourceIpv6 *ebpf.Map `ebpf:"tc_exclude_source_ipv6"`
@@ -197,6 +200,7 @@ type TCMaps struct {
 func (m *TCMaps) Close() error {
 	return _TCClose(
 		m.TcAssignment,
+		m.TcAssignmentClaim,
 		m.TcControl,
 		m.TcExcludeSourceIpv4,
 		m.TcExcludeSourceIpv6,

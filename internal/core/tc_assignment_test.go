@@ -28,6 +28,15 @@ func newTestAssignmentBackend(t *testing.T) *TCBackend {
 	t.Cleanup(func() { _ = assignmentMap.Close() })
 	backend := &TCBackend{}
 	backend.runtime = &tcRuntime{maps: map[string]*CiliumEBPF.Map{"tc_assignment": assignmentMap}}
+	claimMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
+		Type: CiliumEBPF.Hash, Flags: bpfFlagNoPrealloc,
+		KeySize: uint32(unsafe.Sizeof(tcAssignKey{})), ValueSize: uint32(unsafe.Sizeof(tcAssignmentClaim{})), MaxEntries: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = claimMap.Close() })
+	backend.runtime.maps["tc_assignment_claim"] = claimMap
 	returnMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
 		Type: CiliumEBPF.Hash, KeySize: uint32(unsafe.Sizeof(tcAssignKey{})),
 		ValueSize: uint32(unsafe.Sizeof(tcReturnValue{})), MaxEntries: 64,
@@ -286,6 +295,33 @@ func TestSweepAssignmentsPreservesCoalescedActivity(t *testing.T) {
 	}
 	if err = backend.runtime.maps["tc_return"].Lookup(key, &returnValue); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSweepAssignmentsPreservesPublishingClaim(t *testing.T) {
+	backend := newTestAssignmentBackend(t)
+	backend.assignmentCapacity = 64
+	source := netip.MustParseAddrPort("192.0.2.10:53000")
+	destination := netip.MustParseAddrPort("1.1.1.1:53")
+	key, err := makeTCAssignKey(ProtocolUDP, source, destination, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := TCAssignment{SocketCookie: 0x5555, InterfaceIndex: 17, Path: TCPathShared, Generation: 9, LastSeenNS: 1}
+	if err = updateMap(backend.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
+		t.Fatal(err)
+	}
+	claim := tcAssignmentClaim{SocketCookie: value.SocketCookie, Generation: value.Generation}
+	if err = backend.runtime.maps["tc_assignment_claim"].Put(key, claim); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := backend.SweepAssignments(time.Second, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 0 || result.InFlight != 1 {
+		t.Fatalf("publishing claim was reclaimed: %+v", result)
 	}
 }
 

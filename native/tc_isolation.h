@@ -126,9 +126,26 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
         previous->path == path && previous->source_mac_valid == assignment.source_mac_valid &&
         source_mac_equal(previous->source_mac, assignment.source_mac)) {
         refresh_tc_activity(&previous->last_seen_ns, now);
-    } else if (map_update(&tc_assignment, flow, &assignment, BPF_ANY) != 0) {
-        increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
-        return TC_ACT_SHOT;
+	} else {
+		struct sb_tc_assignment_claim claim = {
+			.socket_cookie = cookie, .generation = assignment.generation,
+		};
+		struct sb_tc_assignment_claim *existing_claim = map_lookup(&tc_assignment_claim, flow);
+		if (existing_claim == 0) {
+			if (map_update(&tc_assignment_claim, flow, &claim, BPF_NOEXIST) != 0)
+				existing_claim = map_lookup(&tc_assignment_claim, flow);
+		}
+		if (existing_claim == 0 || existing_claim->socket_cookie != claim.socket_cookie ||
+			existing_claim->generation != claim.generation) {
+			increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
+			return TC_ACT_SHOT;
+		}
+		if (map_update(&tc_assignment, flow, &assignment, BPF_ANY) != 0) {
+			map_delete(&tc_assignment_claim, flow);
+			increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
+			return TC_ACT_SHOT;
+		}
+		map_delete(&tc_assignment_claim, flow);
     }
     return deliver_isolated(skb, control, ethernet);
 }

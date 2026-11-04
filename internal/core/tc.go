@@ -148,6 +148,12 @@ type tcAssignKey struct {
 	DestinationAddress [16]byte
 }
 
+type tcAssignmentClaim struct {
+	SocketCookie uint64
+	Generation   uint32
+	Reserved     uint32
+}
+
 type TCAssignment struct {
 	SocketCookie   uint64
 	LastSeenNS     uint64
@@ -280,6 +286,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_control":             {name: "sb_tc_ctl", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"tc_listener_sockets":    {name: "sb_tc_listen", mapType: CiliumEBPF.SockMap, maxEntries: 2},
 		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity, flags: bpfFlagNoPrealloc},
+		"tc_assignment_claim":    {name: "sb_tc_claim", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity, flags: bpfFlagNoPrealloc},
 		"tc_stats":               {name: "sb_tc_stats", mapType: CiliumEBPF.PerCPUArray, maxEntries: tcStatCount},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
 		"tc_local_bypass_ipv4":   {name: "sb_tc_lbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},
@@ -839,6 +846,18 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 		if current.LastSeenNS > staleBefore {
 			result.InFlight++
 			continue
+		}
+		if claimMap := b.runtime.maps["tc_assignment_claim"]; claimMap != nil {
+			var claim tcAssignmentClaim
+			claimErr := lookupMap(claimMap.FD(), unsafe.Pointer(&candidate.key), unsafe.Pointer(&claim))
+			if claimErr == nil {
+				result.InFlight++
+				continue
+			}
+			if !errors.Is(claimErr, unix.ENOENT) {
+				result.Failure = TCAssignmentSweepFailureLookup
+				return result, claimErr
+			}
 		}
 		if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
 			result.Failure = TCAssignmentSweepFailureDelete
