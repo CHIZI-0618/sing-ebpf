@@ -28,6 +28,10 @@ const (
 	kernelProgramNameCgroupSendmsg6 = "sb_ebpf_udp6"
 	// sb_ebpf_urcv6: local cgroup IPv6 UDP recvmsg destination restoration.
 	kernelProgramNameCgroupRecvmsg6 = "sb_ebpf_urcv6"
+	// sb_ebpf_peer4: local cgroup IPv4 getpeername original-destination restoration.
+	kernelProgramNameCgroupGetpeername4 = "sb_ebpf_peer4"
+	// sb_ebpf_peer6: local cgroup IPv6 getpeername original-destination restoration.
+	kernelProgramNameCgroupGetpeername6 = "sb_ebpf_peer6"
 	// sb_ebpf_rel: local cgroup socket-release cleanup.
 	kernelProgramNameCgroupRelease = "sb_ebpf_rel"
 

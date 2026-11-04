@@ -25,6 +25,7 @@ const (
 	CgroupCoarseMapCgroupHostIpv4              = "cgroup_host_ipv4"
 	CgroupCoarseMapCgroupHostIpv6              = "cgroup_host_ipv6"
 	CgroupCoarseMapCgroupSocketBypass          = "cgroup_socket_bypass"
+	CgroupCoarseMapCgroupTcpPeer               = "cgroup_tcp_peer"
 	CgroupCoarseMapCgroupTcpRedirect           = "cgroup_tcp_redirect"
 	CgroupCoarseMapCgroupUdpFlow               = "cgroup_udp_flow"
 	CgroupCoarseMapCgroupUdpPeer               = "cgroup_udp_peer"
@@ -45,6 +46,9 @@ const (
 	CgroupCoarseProgSbEbpfConn6MappedCookie    = "sb_ebpf_conn6_mapped_cookie"
 	CgroupCoarseProgSbEbpfConn6MappedCookieTcp = "sb_ebpf_conn6_mapped_cookie_tcp"
 	CgroupCoarseProgSbEbpfConn6MappedCookieUdp = "sb_ebpf_conn6_mapped_cookie_udp"
+	CgroupCoarseProgSbEbpfPeer4C               = "sb_ebpf_peer4_c"
+	CgroupCoarseProgSbEbpfPeer6C               = "sb_ebpf_peer6_c"
+	CgroupCoarseProgSbEbpfPeer6MappedC         = "sb_ebpf_peer6_mapped_c"
 	CgroupCoarseProgSbEbpfRelCookie            = "sb_ebpf_rel_cookie"
 	CgroupCoarseProgSbEbpfRelNotify            = "sb_ebpf_rel_notify"
 	CgroupCoarseProgSbEbpfUdp4Cookie           = "sb_ebpf_udp4_cookie"
@@ -106,6 +110,9 @@ type CgroupCoarseProgramSpecs struct {
 	SbEbpfConn6MappedCookie    *ebpf.ProgramSpec `ebpf:"sb_ebpf_conn6_mapped_cookie"`
 	SbEbpfConn6MappedCookieTcp *ebpf.ProgramSpec `ebpf:"sb_ebpf_conn6_mapped_cookie_tcp"`
 	SbEbpfConn6MappedCookieUdp *ebpf.ProgramSpec `ebpf:"sb_ebpf_conn6_mapped_cookie_udp"`
+	SbEbpfPeer4C               *ebpf.ProgramSpec `ebpf:"sb_ebpf_peer4_c"`
+	SbEbpfPeer6C               *ebpf.ProgramSpec `ebpf:"sb_ebpf_peer6_c"`
+	SbEbpfPeer6MappedC         *ebpf.ProgramSpec `ebpf:"sb_ebpf_peer6_mapped_c"`
 	SbEbpfRelCookie            *ebpf.ProgramSpec `ebpf:"sb_ebpf_rel_cookie"`
 	SbEbpfRelNotify            *ebpf.ProgramSpec `ebpf:"sb_ebpf_rel_notify"`
 	SbEbpfUdp4Cookie           *ebpf.ProgramSpec `ebpf:"sb_ebpf_udp4_cookie"`
@@ -129,6 +136,7 @@ type CgroupCoarseMapSpecs struct {
 	CgroupHostIpv4         *ebpf.MapSpec `ebpf:"cgroup_host_ipv4"`
 	CgroupHostIpv6         *ebpf.MapSpec `ebpf:"cgroup_host_ipv6"`
 	CgroupSocketBypass     *ebpf.MapSpec `ebpf:"cgroup_socket_bypass"`
+	CgroupTcpPeer          *ebpf.MapSpec `ebpf:"cgroup_tcp_peer"`
 	CgroupTcpRedirect      *ebpf.MapSpec `ebpf:"cgroup_tcp_redirect"`
 	CgroupUdpFlow          *ebpf.MapSpec `ebpf:"cgroup_udp_flow"`
 	CgroupUdpPeer          *ebpf.MapSpec `ebpf:"cgroup_udp_peer"`
@@ -177,6 +185,7 @@ type CgroupCoarseMaps struct {
 	CgroupHostIpv4         *ebpf.Map `ebpf:"cgroup_host_ipv4"`
 	CgroupHostIpv6         *ebpf.Map `ebpf:"cgroup_host_ipv6"`
 	CgroupSocketBypass     *ebpf.Map `ebpf:"cgroup_socket_bypass"`
+	CgroupTcpPeer          *ebpf.Map `ebpf:"cgroup_tcp_peer"`
 	CgroupTcpRedirect      *ebpf.Map `ebpf:"cgroup_tcp_redirect"`
 	CgroupUdpFlow          *ebpf.Map `ebpf:"cgroup_udp_flow"`
 	CgroupUdpPeer          *ebpf.Map `ebpf:"cgroup_udp_peer"`
@@ -201,6 +210,7 @@ func (m *CgroupCoarseMaps) Close() error {
 		m.CgroupHostIpv4,
 		m.CgroupHostIpv6,
 		m.CgroupSocketBypass,
+		m.CgroupTcpPeer,
 		m.CgroupTcpRedirect,
 		m.CgroupUdpFlow,
 		m.CgroupUdpPeer,
@@ -234,6 +244,9 @@ type CgroupCoarsePrograms struct {
 	SbEbpfConn6MappedCookie    *ebpf.Program `ebpf:"sb_ebpf_conn6_mapped_cookie"`
 	SbEbpfConn6MappedCookieTcp *ebpf.Program `ebpf:"sb_ebpf_conn6_mapped_cookie_tcp"`
 	SbEbpfConn6MappedCookieUdp *ebpf.Program `ebpf:"sb_ebpf_conn6_mapped_cookie_udp"`
+	SbEbpfPeer4C               *ebpf.Program `ebpf:"sb_ebpf_peer4_c"`
+	SbEbpfPeer6C               *ebpf.Program `ebpf:"sb_ebpf_peer6_c"`
+	SbEbpfPeer6MappedC         *ebpf.Program `ebpf:"sb_ebpf_peer6_mapped_c"`
 	SbEbpfRelCookie            *ebpf.Program `ebpf:"sb_ebpf_rel_cookie"`
 	SbEbpfRelNotify            *ebpf.Program `ebpf:"sb_ebpf_rel_notify"`
 	SbEbpfUdp4Cookie           *ebpf.Program `ebpf:"sb_ebpf_udp4_cookie"`
@@ -255,6 +268,9 @@ func (p *CgroupCoarsePrograms) Close() error {
 		p.SbEbpfConn6MappedCookie,
 		p.SbEbpfConn6MappedCookieTcp,
 		p.SbEbpfConn6MappedCookieUdp,
+		p.SbEbpfPeer4C,
+		p.SbEbpfPeer6C,
+		p.SbEbpfPeer6MappedC,
 		p.SbEbpfRelCookie,
 		p.SbEbpfRelNotify,
 		p.SbEbpfUdp4Cookie,

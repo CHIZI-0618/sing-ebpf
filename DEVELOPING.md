@@ -158,6 +158,8 @@ wildcard bind, any other listener the SOCKMAP rejects → direct listener lookup
 selected at registration,
 cgroup socket-release notification → bounded LRU cleanup,
 socket-release probe permission denial → the same bounded LRU cleanup, and
+cgroup getpeername restoration → the original token-peer behavior when the
+optional hook is unavailable,
 cgroup multi-program → compatible legacy exclusive attachment, and a root hook
 held by the Android 15+ netd pass-through placeholder → unflagged replacement
 of that placeholder, restored on detach. Do not turn an optional fallback

@@ -87,11 +87,13 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 		return "Loads the generated cgroup programs without attaching cgroup hooks.", err
 	}
 	runtimeState := &cgroupRuntime{
-		maps:                  make(map[string]*CiliumEBPF.Map),
-		programs:              make([]*CiliumEBPF.Program, cgroupProgramCount),
-		enable_tcp:            plan.enableTCP,
-		enable_udp:            plan.enableUDP,
-		coarse_time_supported: plan.enableUDP && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil,
+		maps:                   make(map[string]*CiliumEBPF.Map),
+		programs:               make([]*CiliumEBPF.Program, cgroupProgramCount),
+		enable_tcp:             plan.enableTCP,
+		enable_udp:             plan.enableUDP,
+		coarse_time_supported:  plan.enableUDP && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil,
+		getpeername4_supported: probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet4GetPeername),
+		getpeername6_supported: probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet6GetPeername),
 	}
 	backend := &CgroupBackend{
 		runtime:      runtimeState,

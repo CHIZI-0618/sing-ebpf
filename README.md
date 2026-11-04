@@ -196,6 +196,12 @@ socket-release cleanup when the optional multi-program probe succeeds;
 otherwise it uses bounded LRU recovery. The probe never performs an
 unflagged legacy attach, so it cannot replace an existing Android/netd
 socket-release owner merely to test the optional capability.
+On kernels that accept the optional cgroup `getpeername` hooks (normally Linux
+5.8 or newer), TCP also remembers the original destination by socket cookie and
+restores it when an intercepted socket asks for its peer address. This keeps
+applications that reuse `RemoteAddr` from sending a token address back into the
+redirect listener. If the hook is unavailable or rejected by vendor policy,
+interception remains enabled and the diagnostic reports the fallback.
 
 The kernel puts a cgroup hook in single-program mode when a program is attached
 without `BPF_F_ALLOW_MULTI`, and then rejects every multi-program attachment on

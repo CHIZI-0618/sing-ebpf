@@ -41,6 +41,10 @@ MAP(cgroup_udp_recovery, struct sb_ebpf_listener_key, struct sb_ebpf_original_ds
 MAP(cgroup_udp_token, __u64, struct sb_ebpf_listener_key, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_token_reverse, struct sb_ebpf_listener_key, struct sb_ebpf_udp_token_reverse_value, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_HASH);
+// Original destination of each redirected TCP socket, by socket cookie, for
+// getpeername restoration.  TCP redirect entries are consumed when the
+// listener accepts the connection, so they cannot answer later queries.
+MAP(cgroup_tcp_peer, struct sb_ebpf_udp_peer_key, struct sb_ebpf_udp_peer_value, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_udp_flow, struct sb_ebpf_udp_flow_key, struct sb_ebpf_udp_flow_value, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_socket_bypass, __u64, __u32, BPF_MAP_TYPE_LRU_HASH);
 MAP(cgroup_uid_policy, struct sb_ebpf_uid_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE);
@@ -509,6 +513,28 @@ INLINE void store_udp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) 
     map_update(&cgroup_udp_peer, &cookie, &peer, 0U);
 }
 
+INLINE void store_tcp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
+    if (cookie == 0U) return;
+    struct sb_ebpf_udp_peer_value peer = {
+        .family = AF_INET_VALUE,
+        .protocol = TCP_VALUE,
+        .port = port,
+    };
+    __builtin_memcpy(peer.addr, &address, sizeof(address));
+    map_update(&cgroup_tcp_peer, &cookie, &peer, 0U);
+}
+
+INLINE void store_tcp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) {
+    if (cookie == 0U) return;
+    struct sb_ebpf_udp_peer_value peer = {
+        .family = AF_INET6_VALUE,
+        .protocol = TCP_VALUE,
+        .port = port,
+    };
+    __builtin_memcpy(peer.addr, address, sizeof(peer.addr));
+    map_update(&cgroup_tcp_peer, &cookie, &peer, 0U);
+}
+
 INLINE bool restore_udp_peer_v4(__u64 cookie, __u32 *address, __u16 *port) {
     if (cookie == 0U || (*address != 0U && *port != 0U)) return false;
     struct sb_ebpf_udp_peer_value *peer = map_lookup(&cgroup_udp_peer, &cookie);
@@ -632,6 +658,7 @@ INLINE int handle_v4(
             cookie, SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
     if (connected_udp) watch_udp_release(config, cookie);
+    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(cookie, destination, port);
     return rewrite_v4(ctx, &listener) ? 1 : 0;
 }
 
@@ -719,6 +746,7 @@ INLINE int handle_v6(
                 SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
         }
         if (connected_udp) watch_udp_release(config, cookie);
+        if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v4(cookie, destination, port);
         return rewrite_v4_mapped(ctx, &listener) ? 1 : 0;
     }
     if (!enable_native_ipv6) return 1;
@@ -772,6 +800,7 @@ INLINE int handle_v6(
             SB_EBPF_UDP_FLOW_ACTION_PROXY, &listener);
     }
     if (connected_udp) watch_udp_release(config, cookie);
+    if (connect_hook && protocol == TCP_VALUE) store_tcp_peer_v6(cookie, address, port);
     return rewrite_v6(ctx, &listener) ? 1 : 0;
 }
 
@@ -854,6 +883,86 @@ SEC("cgroup/recvmsg4") int sb_ebpf_urcv4_c(struct bpf_sock_addr *ctx) { return r
 SEC("cgroup/recvmsg6") int sb_ebpf_urcv6_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, true); }
 SEC("cgroup/recvmsg6_mapped") int sb_ebpf_urcv6_mapped_c(struct bpf_sock_addr *ctx) { return recv_v6(ctx, false); }
 
+// getpeername restoration.  A redirected socket is connected to a listener
+// token, so without these hooks getpeername reports the token instead of the
+// destination the application connected to.  Applications that read the peer
+// back and reuse it (sendto, logging, NAT traversal) then address the token
+// directly.  The peer is looked up by socket cookie and only replaces an
+// address that is a token of this backend's listener.
+INLINE const struct sb_ebpf_udp_peer_value *redirected_peer(struct bpf_sock_addr *ctx, __u8 family) {
+    __u64 cookie = get_socket_cookie(ctx);
+    if (cookie == 0U) return 0;
+    const struct sb_ebpf_udp_peer_value *peer;
+    if (ctx->protocol == TCP_VALUE) {
+        peer = map_lookup(&cgroup_tcp_peer, &cookie);
+    } else if (ctx->protocol == UDP_VALUE) {
+        peer = map_lookup(&cgroup_udp_peer, &cookie);
+    } else {
+        return 0;
+    }
+    if (peer == 0 || peer->family != family) return 0;
+    return peer;
+}
+
+INLINE int peer_v4(struct bpf_sock_addr *ctx) {
+    const struct sb_ebpf_cgroup_control *config = control();
+    if (config == 0) return 1;
+    if ((config->flags & SB_EBPF_CGROUP_FLAG_IPV4) == 0U) return 1;
+    __u32 token = ctx->user_ip4;
+    if ((network_order32(token) & ~config->redirect_ipv4_host_mask) != config->redirect_ipv4_prefix) return 1;
+    if (network_order16((__u16)ctx->user_port) != config->listener_port) return 1;
+    const struct sb_ebpf_udp_peer_value *peer = redirected_peer(ctx, AF_INET_VALUE);
+    if (peer == 0) return 1;
+    __u32 address;
+    __builtin_memcpy(&address, peer->addr, sizeof(address));
+    ctx->user_ip4 = address;
+    ctx->user_port = network_order16(peer->port);
+    return 1;
+}
+
+INLINE int peer_v6(struct bpf_sock_addr *ctx, bool enable_native_ipv6) {
+    const struct sb_ebpf_cgroup_control *config = control();
+    if (config == 0) return 1;
+    if (network_order16((__u16)ctx->user_port) != config->listener_port) return 1;
+    __u32 address[4];
+    __builtin_memcpy(address, ctx->user_ip6, sizeof(address));
+    if (ipv4_mapped(address)) {
+        if ((config->flags & SB_EBPF_CGROUP_FLAG_IPV4) == 0U) return 1;
+        __u32 token;
+        __builtin_memcpy(&token, ((__u8 *)address) + 12U, sizeof(token));
+        if ((network_order32(token) & ~config->redirect_ipv4_host_mask) != config->redirect_ipv4_prefix) return 1;
+        const struct sb_ebpf_udp_peer_value *peer = redirected_peer(ctx, AF_INET_VALUE);
+        if (peer == 0) return 1;
+        __u32 original_address;
+        __builtin_memcpy(&original_address, peer->addr, sizeof(original_address));
+        *(volatile __u32 *)&ctx->user_ip6[0] = 0U;
+        *(volatile __u32 *)&ctx->user_ip6[1] = 0U;
+        *(volatile __u32 *)&ctx->user_ip6[2] = IPV4_MAPPED_WORD;
+        *(volatile __u32 *)&ctx->user_ip6[3] = original_address;
+        ctx->user_port = network_order16(peer->port);
+        return 1;
+    }
+    if (!enable_native_ipv6) return 1;
+    if ((config->flags & SB_EBPF_CGROUP_FLAG_IPV6) == 0U) return 1;
+    __u32 redirect_prefix[2];
+    __builtin_memcpy(redirect_prefix, config->redirect_ipv6_prefix, sizeof(redirect_prefix));
+    if (address[0] != redirect_prefix[0] || address[1] != redirect_prefix[1]) return 1;
+    const struct sb_ebpf_udp_peer_value *peer = redirected_peer(ctx, AF_INET6_VALUE);
+    if (peer == 0) return 1;
+    __u32 original_address[4];
+    __builtin_memcpy(original_address, peer->addr, sizeof(original_address));
+    *(volatile __u32 *)&ctx->user_ip6[0] = original_address[0];
+    *(volatile __u32 *)&ctx->user_ip6[1] = original_address[1];
+    *(volatile __u32 *)&ctx->user_ip6[2] = original_address[2];
+    *(volatile __u32 *)&ctx->user_ip6[3] = original_address[3];
+    ctx->user_port = network_order16(peer->port);
+    return 1;
+}
+
+SEC("cgroup/getpeername4") int sb_ebpf_peer4_c(struct bpf_sock_addr *ctx) { return peer_v4(ctx); }
+SEC("cgroup/getpeername6") int sb_ebpf_peer6_c(struct bpf_sock_addr *ctx) { return peer_v6(ctx, true); }
+SEC("cgroup/getpeername6_mapped") int sb_ebpf_peer6_mapped_c(struct bpf_sock_addr *ctx) { return peer_v6(ctx, false); }
+
 INLINE int release_socket_cookie(__u64 cookie, __u64 released_at_ns) {
     if (cookie == 0U) return 1;
     struct sb_ebpf_listener_key *listener = map_lookup(&cgroup_udp_token, &cookie);
@@ -875,6 +984,7 @@ INLINE int release_socket_cookie(__u64 cookie, __u64 released_at_ns) {
     // Every socket in the cgroup is released through here, and only connected
     // UDP and self-bypass sockets own these entries.
     delete_present(&cgroup_udp_peer, &cookie);
+    delete_present(&cgroup_tcp_peer, &cookie);
     delete_present(&cgroup_socket_bypass, &cookie);
     return 1;
 }

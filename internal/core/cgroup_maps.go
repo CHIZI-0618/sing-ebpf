@@ -36,6 +36,7 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	overrides := map[string]mapSpecOverride{
 		"cgroup_control":           {name: "sb_cg_control", mapType: CiliumEBPF.Array, maxEntries: 1},
 		"cgroup_tcp_redirect":      {name: "sb_cg_tcp", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity},
+		"cgroup_tcp_peer":          {name: "sb_cg_tcp_peer", mapType: CiliumEBPF.LRUHash, maxEntries: tcpCapacity},
 		"cgroup_udp_redirect":      {name: "sb_cg_udp", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},
 		"cgroup_udp_recovery":      {name: "sb_cg_recover", mapType: CiliumEBPF.LRUHash, maxEntries: recoveryCapacity},
 		"cgroup_udp_token":         {name: "sb_cg_token", mapType: udpLayout.cleanupType, maxEntries: udpCapacity, flags: udpLayout.cleanupFlags},

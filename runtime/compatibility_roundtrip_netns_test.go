@@ -138,6 +138,10 @@ func testCompatibilityCgroupRoundTrip(t *testing.T, udp bool) {
 				t.Fatal(err)
 			}
 			defer client.Close()
+			// net fills RemoteAddr from getpeername after connect.
+			if peer := client.RemoteAddr().(*net.TCPAddr).AddrPort(); peer != netip.MustParseAddrPort(destination) {
+				t.Fatalf("getpeername reported %s, want %s", peer, destination)
+			}
 			_ = listener.(*net.TCPListener).SetDeadline(time.Now().Add(3 * time.Second))
 			server, err := listener.Accept()
 			if err != nil {
@@ -177,6 +181,12 @@ func testCompatibilityCgroupUDPExchange(t *testing.T, backend *core.CgroupBacken
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if connected {
+		// net fills RemoteAddr from getpeername after connect.
+		if peer := client.RemoteAddr().(*net.UDPAddr).AddrPort(); peer != remote.AddrPort() {
+			t.Fatalf("getpeername reported %s, want %s", peer, remote.AddrPort())
+		}
+	}
 	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
 	_ = server.SetDeadline(time.Now().Add(3 * time.Second))
 	payload := []byte("cgroup UDP compatibility")

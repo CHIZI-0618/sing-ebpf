@@ -404,6 +404,10 @@ func detachOwnedCgroupPrograms(cgroupFD int, slot int) error {
 			if definition.attachType == CiliumEBPF.AttachCgroupInetSockRelease && socketReleaseUnavailable(err) {
 				continue
 			}
+			if (definition.attachType == CiliumEBPF.AttachCgroupInet4GetPeername ||
+				definition.attachType == CiliumEBPF.AttachCgroupInet6GetPeername) && getpeernameUnavailable(err) {
+				continue
+			}
 			return err
 		}
 		if len(first) == 0 {
@@ -525,6 +529,10 @@ func (b *CgroupBackend) Attach() error {
 				b.runtime.attach_modes[slot] = attachment.mode
 				b.runtime.displaced[slot] = attachment.displaced
 			}
+		}
+		if err != nil && cgroupGetpeernameSlot(slot) && getpeernameUnavailable(err) {
+			// Optional peer restoration; interception works without it.
+			continue
 		}
 		if err != nil {
 			_ = b.detachProgramsLocked()
