@@ -53,6 +53,9 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		"cgroup_udp_release_watch": {
 			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
 		},
+		"cgroup_udp_release_stats": {
+			name: "sb_cg_rel_stat", mapType: CiliumEBPF.PerCPUArray, maxEntries: cgroupUDPReleaseStatsCount,
+		},
 	}
 	addForceMapOverrides(overrides, "cgroup", "sb_cg_force", force)
 	if selfBypassMap != nil {
@@ -72,16 +75,12 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 		overrides["cgroup_udp_release_events"] = mapSpecOverride{
 			name: "sb_cg_rel_evt", mapType: CiliumEBPF.RingBuf, maxEntries: cgroupUDPReleaseRingSize,
 		}
-		overrides["cgroup_udp_release_stats"] = mapSpecOverride{
-			name: "sb_cg_rel_stat", mapType: CiliumEBPF.PerCPUArray, maxEntries: 1,
-		}
 	}
 	var err error
 	runtimeState.maps, err = loadObjectMaps(loadCgroup, overrides)
 	if err != nil && overrides["cgroup_udp_release_events"].mapType == CiliumEBPF.RingBuf {
 		runtimeState.udp_release_fallback_reason = "ringbuf_map_load_failed"
 		delete(overrides, "cgroup_udp_release_events")
-		delete(overrides, "cgroup_udp_release_stats")
 		overrides["cgroup_udp_release_watch"] = mapSpecOverride{
 			name: "sb_cg_rel_watch", mapType: CiliumEBPF.Hash, maxEntries: 1, flags: bpfFlagNoPrealloc,
 		}

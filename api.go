@@ -28,6 +28,7 @@ type (
 	SharedPacketRewriteMapCapacity = core.SharedPacketRewriteMapCapacity
 	OriginalDestination            = core.OriginalDestination
 	CgroupBackend                  = core.CgroupBackend
+	CgroupUDPStat                  = core.CgroupUDPStat
 	SharedPacketRewriteConfig      = core.SharedPacketRewriteConfig
 	SharedPacketRewriteFlowHandle  = core.SharedPacketRewriteFlowHandle
 	SharedPacketRewriteSweepResult = core.SharedPacketRewriteSweepResult
@@ -60,6 +61,17 @@ type (
 	UDPStateDiagnostics            = core.UDPStateDiagnostics
 	UDPReleaseEvent                = core.UDPReleaseEvent
 	UDPRecoverySweepResult         = core.UDPRecoverySweepResult
+)
+
+const (
+	CgroupUDPStatReleaseNotificationDrops = core.CgroupUDPStatReleaseNotificationDrops
+	CgroupUDPStatTCPRedirectFailure       = core.CgroupUDPStatTCPRedirectFailure
+	CgroupUDPStatUDPRedirectFailure       = core.CgroupUDPStatUDPRedirectFailure
+	CgroupUDPStatUDPTokenFailure          = core.CgroupUDPStatUDPTokenFailure
+	CgroupUDPStatUDPTokenReverseFailure   = core.CgroupUDPStatUDPTokenReverseFailure
+	CgroupUDPStatUDPPeerFailure           = core.CgroupUDPStatUDPPeerFailure
+	CgroupUDPStatTCPPeerFailure           = core.CgroupUDPStatTCPPeerFailure
+	CgroupUDPStatUDPRecoveryFailure       = core.CgroupUDPStatUDPRecoveryFailure
 )
 
 const (

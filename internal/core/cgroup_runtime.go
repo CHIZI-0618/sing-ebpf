@@ -27,6 +27,7 @@ type UDPReleaseEvent struct {
 
 const (
 	cgroupUDPReleaseRingSize            = 64 * 1024
+	cgroupUDPReleaseStatsCount          = 8
 	cgroupUDPUserspaceCleanupDeadline   = "deadline"
 	cgroupUDPUserspaceCleanupRingBuffer = "ringbuf"
 	cgroupUDPStateFull                  = "full"
@@ -250,6 +251,25 @@ func (b *CgroupBackend) UDPUserspaceCleanupMode() string {
 // It is read only when diagnostics are requested and does not add polling or
 // userspace work to the normal data path.
 func (b *CgroupBackend) UDPReleaseNotificationDrops() (uint64, error) {
+	return b.UDPReleaseStat(CgroupUDPStatReleaseNotificationDrops)
+}
+
+type CgroupUDPStat uint32
+
+const (
+	CgroupUDPStatReleaseNotificationDrops CgroupUDPStat = iota
+	CgroupUDPStatTCPRedirectFailure
+	CgroupUDPStatUDPRedirectFailure
+	CgroupUDPStatUDPTokenFailure
+	CgroupUDPStatUDPTokenReverseFailure
+	CgroupUDPStatUDPPeerFailure
+	CgroupUDPStatTCPPeerFailure
+	CgroupUDPStatUDPRecoveryFailure
+)
+
+// UDPReleaseStat reads one aggregated per-CPU cgroup admission counter. It is
+// diagnostic-only and never runs from a packet or maintenance path.
+func (b *CgroupBackend) UDPReleaseStat(stat CgroupUDPStat) (uint64, error) {
 	if b == nil {
 		return 0, unix.EOPNOTSUPP
 	}
@@ -262,7 +282,7 @@ func (b *CgroupBackend) UDPReleaseNotificationDrops() (uint64, error) {
 	if statsMap == nil {
 		return 0, unix.EOPNOTSUPP
 	}
-	index := uint32(0)
+	index := uint32(stat)
 	var perCPU []uint64
 	if err := statsMap.Lookup(&index, &perCPU); err != nil {
 		return 0, err

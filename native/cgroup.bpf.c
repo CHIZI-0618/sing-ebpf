@@ -14,6 +14,16 @@
 #define UDP_VALUE 17U
 #define REDIRECT_TOKEN_ATTEMPTS 4U
 
+#define SB_CGROUP_STAT_RELEASE_NOTIFICATION_DROPS 0U
+#define SB_CGROUP_STAT_TCP_REDIRECT_FAILURE 1U
+#define SB_CGROUP_STAT_UDP_REDIRECT_FAILURE 2U
+#define SB_CGROUP_STAT_UDP_TOKEN_FAILURE 3U
+#define SB_CGROUP_STAT_UDP_TOKEN_REVERSE_FAILURE 4U
+#define SB_CGROUP_STAT_UDP_PEER_FAILURE 5U
+#define SB_CGROUP_STAT_TCP_PEER_FAILURE 6U
+#define SB_CGROUP_STAT_UDP_RECOVERY_FAILURE 7U
+#define SB_CGROUP_STAT_COUNT 8U
+
 enum flow_cache_result {
     FLOW_CACHE_MISS,
     FLOW_CACHE_BYPASS,
@@ -61,7 +71,7 @@ MAP(cgroup_bypass_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_LPM
 MAP(cgroup_host_ipv4, struct sb_ebpf_ipv4_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_host_ipv6, struct sb_ebpf_ipv6_cidr_lpm_key, __u8, BPF_MAP_TYPE_HASH);
 MAP(cgroup_udp_release_watch, __u64, __u8, BPF_MAP_TYPE_HASH);
-MAP(cgroup_udp_release_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY);
+MAP_FLAGS(cgroup_udp_release_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_CGROUP_STAT_COUNT, 0U);
 struct bpf_map_def SEC("maps") cgroup_udp_release_events = {
     .type = BPF_MAP_TYPE_RINGBUF,
     .max_entries = 65536U,
@@ -78,6 +88,12 @@ static long (*ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags
 #ifdef SB_EBPF_USE_COARSE_TIME
 static __u64 (*ktime_get_coarse_ns)(void) = (void *)BPF_FUNC_ktime_get_coarse_ns;
 #endif
+
+INLINE void increment_cgroup_stat(__u32 index) {
+    if (index >= SB_CGROUP_STAT_COUNT) return;
+    __u64 *value = map_lookup(&cgroup_udp_release_stats, &index);
+    if (value != 0) *value += 1U;
+}
 
 SB_FORCE_LOOKUP(cgroup)
 
@@ -269,6 +285,7 @@ INLINE bool token_v4(
         }
         seed += 0x9e3779b9U;
     }
+    increment_cgroup_stat(protocol == TCP_VALUE ? SB_CGROUP_STAT_TCP_REDIRECT_FAILURE : SB_CGROUP_STAT_UDP_REDIRECT_FAILURE);
     return false;
 }
 
@@ -305,6 +322,7 @@ INLINE bool token_v6(
         seed0 += 0x9e3779b9U;
         seed1 += 0x7f4a7c15U;
     }
+    increment_cgroup_stat(protocol == TCP_VALUE ? SB_CGROUP_STAT_TCP_REDIRECT_FAILURE : SB_CGROUP_STAT_UDP_REDIRECT_FAILURE);
     return false;
 }
 
@@ -484,7 +502,10 @@ INLINE bool store_connected_udp_token(
         map_delete(&cgroup_udp_token, &previous_cookie);
         map_delete(&cgroup_udp_peer, &previous_cookie);
     }
-    if (map_update(&cgroup_udp_token, &cookie, listener, 0U) != 0) return false;
+    if (map_update(&cgroup_udp_token, &cookie, listener, 0U) != 0) {
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_TOKEN_FAILURE);
+        return false;
+    }
     struct sb_ebpf_udp_token_reverse_value reverse = {
         .socket_cookie = cookie,
         .network_generation = config == 0 ? 0U : config->network_generation,
@@ -492,6 +513,7 @@ INLINE bool store_connected_udp_token(
     if (map_update(&cgroup_udp_token_reverse, listener, &reverse, 0U) != 0) {
         map_delete(&cgroup_udp_token, &cookie);
         map_delete(&cgroup_udp_token_reverse, listener);
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_TOKEN_REVERSE_FAILURE);
         return false;
     }
     return true;
@@ -505,7 +527,8 @@ INLINE void store_udp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
         .port = port,
     };
     __builtin_memcpy(peer.addr, &address, sizeof(address));
-    map_update(&cgroup_udp_peer, &cookie, &peer, 0U);
+    if (map_update(&cgroup_udp_peer, &cookie, &peer, 0U) != 0)
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
 }
 
 INLINE void store_udp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) {
@@ -517,7 +540,8 @@ INLINE void store_udp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) 
         .port = port,
     };
     __builtin_memcpy(peer.addr, address, sizeof(peer.addr));
-    map_update(&cgroup_udp_peer, &cookie, &peer, 0U);
+    if (map_update(&cgroup_udp_peer, &cookie, &peer, 0U) != 0)
+        increment_cgroup_stat(SB_CGROUP_STAT_UDP_PEER_FAILURE);
 }
 
 INLINE void store_tcp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
@@ -528,7 +552,8 @@ INLINE void store_tcp_peer_v4(__u64 cookie, __u32 address, __u16 port) {
         .port = port,
     };
     __builtin_memcpy(peer.addr, &address, sizeof(address));
-    map_update(&cgroup_tcp_peer, &cookie, &peer, 0U);
+    if (map_update(&cgroup_tcp_peer, &cookie, &peer, 0U) != 0)
+        increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
 }
 
 INLINE void store_tcp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) {
@@ -539,7 +564,8 @@ INLINE void store_tcp_peer_v6(__u64 cookie, const __u32 address[4], __u16 port) 
         .port = port,
     };
     __builtin_memcpy(peer.addr, address, sizeof(peer.addr));
-    map_update(&cgroup_tcp_peer, &cookie, &peer, 0U);
+    if (map_update(&cgroup_tcp_peer, &cookie, &peer, 0U) != 0)
+        increment_cgroup_stat(SB_CGROUP_STAT_TCP_PEER_FAILURE);
 }
 
 INLINE bool restore_udp_peer_v4(__u64 cookie, __u32 *address, __u16 *port) {
@@ -982,7 +1008,8 @@ INLINE int release_socket_cookie(__u64 cookie, __u64 released_at_ns) {
             // recovery entries with monotonic ktime so userspace can reclaim
             // entries that never receive a late packet.
             recovery.created_at_ns = released_at_ns != 0U ? released_at_ns : flow_time_ns();
-            map_update(&cgroup_udp_recovery, listener, &recovery, 0U);
+            if (map_update(&cgroup_udp_recovery, listener, &recovery, 0U) != 0)
+                increment_cgroup_stat(SB_CGROUP_STAT_UDP_RECOVERY_FAILURE);
         }
         map_delete(&cgroup_udp_redirect, listener);
         map_delete(&cgroup_udp_token_reverse, listener);
@@ -1026,9 +1053,7 @@ INLINE int release_socket_notify(struct bpf_sock *ctx) {
             };
             __builtin_memcpy(&event.listener, listener, sizeof(event.listener));
             if (ringbuf_output(&cgroup_udp_release_events, &event, sizeof(event), 0U) != 0) {
-                __u32 index = 0U;
-                __u64 *drops = map_lookup(&cgroup_udp_release_stats, &index);
-                if (drops != 0) *drops += 1U;
+                increment_cgroup_stat(SB_CGROUP_STAT_RELEASE_NOTIFICATION_DROPS);
             }
         }
         return release_socket_cookie(cookie, released_at_ns);
