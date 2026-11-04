@@ -140,6 +140,14 @@ func TestMapMetadataDistinguishesAssignmentOwnership(t *testing.T) {
 	if cache.evictionMode != mapEvictionLRUSafeCache || cache.admissionCritical {
 		t.Fatalf("auxiliary metadata = %+v, want safe LRU cache", cache)
 	}
+	self := metadataForMapName("sb_self_sockets")
+	if self.evictionMode != mapEvictionNone || !self.admissionCritical {
+		t.Fatalf("self-bypass metadata = %+v, want non-evicting admission-critical state", self)
+	}
+	cgroupBypass := metadataForMapName("sb_cg_sock_byp")
+	if cgroupBypass.evictionMode != mapEvictionNone || !cgroupBypass.admissionCritical {
+		t.Fatalf("cgroup bypass metadata = %+v, want non-evicting admission-critical state", cgroupBypass)
+	}
 	policy := metadataForMapName("sb_tc_uid")
 	if policy.category != MapCategoryConfiguredPolicy || policy.evictionMode != mapEvictionNone {
 		t.Fatalf("policy metadata = %+v, want configured non-evicting policy", policy)

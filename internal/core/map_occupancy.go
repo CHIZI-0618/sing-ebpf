@@ -95,10 +95,11 @@ func metadataForMapName(name string) mapMetadata {
 	}
 	metadata := mapMetadata{category: MapCategoryRuntime, evictionMode: mapEvictionNone}
 	switch name {
-	case "sb_tc_rfrag", "sb_cg_recover", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_flow", "sb_cg_sock_byp", "sb_sh_bypass":
+	case "sb_tc_rfrag", "sb_cg_recover", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_flow", "sb_sh_bypass":
 		metadata.evictionMode = mapEvictionLRUSafeCache
 	}
-	if name == "sb_tc_assign" {
+	switch name {
+	case "sb_self_sockets", "sb_cg_sock_byp", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_udp", "sb_cg_token", "sb_cg_token_rev", "sb_cg_peer", "sb_tc_assign", "sb_tc_return", "sb_sh_orig", "sb_sh_token":
 		metadata.admissionCritical = true
 	}
 	return metadata
