@@ -75,9 +75,11 @@ func (d *tcDataPlane) createIsolatedTCDeliveryLink() (*tcDeliveryLink, error) {
 		PeerHardwareAddr: peerAddress,
 		PeerNamespace:    netlink.NsFd(n.handle),
 	}
+	udevSettle := beginTCUdevSettle(hostName)
 	err = netlink.LinkAdd(veth)
 	n.access.RUnlock()
 	if err != nil {
+		udevSettle.close()
 		return nil, E.Cause(err, "create isolated TC veth (CONFIG_VETH and CAP_NET_ADMIN required)")
 	}
 	owner := &tcDeliveryLink{namespace: n, redirectName: hostName, deliveryName: peerName, redirect: veth, enableIPv6: d.enableIPv6, replyMTU: d.replyMTU}
@@ -88,6 +90,9 @@ func (d *tcDataPlane) createIsolatedTCDeliveryLink() (*tcDeliveryLink, error) {
 		}
 		return owner, err
 	}
+	// udev applies link policy and sysctls to the new host end; configuring it
+	// before udev has finished would be undone moments later.
+	udevSettle.wait(tcUdevSettleTimeout)
 	owner.redirect, err = d.linkByName()(hostName)
 	if err != nil {
 		owner.redirect = veth

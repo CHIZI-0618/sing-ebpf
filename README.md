@@ -116,7 +116,10 @@ addresses and ports; this is not packet/token rewriting.
 Both veth ends get explicit locally administered MAC addresses at creation. The
 host end is visible to udevd, and systemd's default link policy would otherwise
 replace its kernel-generated address after the private namespace's static
-neighbor entry was set to it. The runtime remembers the private end's address
+neighbor entry was set to it. When udevd manages the caller's network namespace,
+the runtime also waits, bounded by 3 s, until udevd has finished processing the
+host end before configuring it, so udev's link policy and sysctls cannot undo
+that configuration moments later. The runtime remembers the private end's address
 programmed as the redirected frames' destination; the health check reports a
 changed address and the repair reprograms the backend in place.
 
