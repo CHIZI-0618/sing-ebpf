@@ -237,7 +237,7 @@ MAP(tc_control, __u32, struct sb_tc_control, BPF_MAP_TYPE_ARRAY, 1U);
 MAP(tc_listener_sockets, __u32, __u32, BPF_MAP_TYPE_SOCKMAP, SB_TC_LISTENER_COUNT);
 /* Assignment ownership is explicit: userspace reclaims entries by generation
  * and activity timestamp. Do not let the kernel silently evict a live flow. */
-MAP_FLAGS(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_TYPE_HASH, 65536U, BPF_F_NO_PREALLOC);
+MAP_FLAGS(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_TYPE_HASH, 32768U, BPF_F_NO_PREALLOC);
 MAP(tc_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_TC_STAT_COUNT);
 MAP(tc_self_sockets, __u64, __u32, BPF_MAP_TYPE_LRU_HASH, 65536U);
 MAP(tc_uid_policy, struct sb_tc_uid_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);

@@ -371,6 +371,9 @@ func TestEmbeddedTCAssignmentIsExplicitlyOwned(t *testing.T) {
 	if assignment.Type != CiliumEBPF.Hash {
 		t.Fatalf("tc_assignment type = %s, want hash", assignment.Type)
 	}
+	if assignment.MaxEntries != tcAssignmentCapacity {
+		t.Fatalf("tc_assignment max entries = %d, want %d", assignment.MaxEntries, tcAssignmentCapacity)
+	}
 	if assignment.Flags&bpfFlagNoPrealloc == 0 {
 		t.Fatalf("tc_assignment flags = %#x, want BPF_F_NO_PREALLOC", assignment.Flags)
 	}
