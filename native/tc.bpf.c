@@ -227,9 +227,17 @@ struct ipv6_fragment_header {
         .max_entries = entries, \
     }
 
+#define MAP_FLAGS(name, key, value, map_type, entries, flags) \
+    struct bpf_map_def SEC("maps") name = { \
+        .type = map_type, .key_size = sizeof(key), .value_size = sizeof(value), \
+        .max_entries = entries, .map_flags = flags, \
+    }
+
 MAP(tc_control, __u32, struct sb_tc_control, BPF_MAP_TYPE_ARRAY, 1U);
 MAP(tc_listener_sockets, __u32, __u32, BPF_MAP_TYPE_SOCKMAP, SB_TC_LISTENER_COUNT);
-MAP(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_TYPE_LRU_HASH, 65536U);
+/* Assignment ownership is explicit: userspace reclaims entries by generation
+ * and activity timestamp. Do not let the kernel silently evict a live flow. */
+MAP_FLAGS(tc_assignment, struct sb_tc_assign_key, struct sb_tc_assign_value, BPF_MAP_TYPE_HASH, 65536U, BPF_F_NO_PREALLOC);
 MAP(tc_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_TC_STAT_COUNT);
 MAP(tc_self_sockets, __u64, __u32, BPF_MAP_TYPE_LRU_HASH, 65536U);
 MAP(tc_uid_policy, struct sb_tc_uid_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);

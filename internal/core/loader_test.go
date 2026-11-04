@@ -359,6 +359,23 @@ func TestEmbeddedTCObjectLayout(t *testing.T) {
 	})
 }
 
+func TestEmbeddedTCAssignmentIsExplicitlyOwned(t *testing.T) {
+	spec, err := loadTC()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := spec.Maps["tc_assignment"]
+	if assignment == nil {
+		t.Fatal("missing tc_assignment map")
+	}
+	if assignment.Type != CiliumEBPF.Hash {
+		t.Fatalf("tc_assignment type = %s, want hash", assignment.Type)
+	}
+	if assignment.Flags&bpfFlagNoPrealloc == 0 {
+		t.Fatalf("tc_assignment flags = %#x, want BPF_F_NO_PREALLOC", assignment.Flags)
+	}
+}
+
 func testEmbeddedObjectLayout(
 	t *testing.T,
 	loadSpec func() (*CiliumEBPF.CollectionSpec, error),

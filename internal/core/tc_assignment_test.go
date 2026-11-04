@@ -16,7 +16,8 @@ import (
 func newTestAssignmentBackend(t *testing.T) *TCBackend {
 	t.Helper()
 	assignmentMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
-		Type:       CiliumEBPF.LRUHash,
+		Type:       CiliumEBPF.Hash,
+		Flags:      bpfFlagNoPrealloc,
 		KeySize:    uint32(unsafe.Sizeof(tcAssignKey{})),
 		ValueSize:  uint32(unsafe.Sizeof(TCAssignment{})),
 		MaxEntries: 64,
