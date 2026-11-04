@@ -90,7 +90,7 @@ type cgroupRuntime struct {
 	// sk_storage binds peer restoration to the kernel socket lifetime. It is
 	// selected only when the optional map type and socket-release hook both
 	// exist; older Android/vendor kernels retain the cookie-map fallback.
-	sk_storage                  bool
+	sk_storage bool
 	// getpeername_supported reports Linux 5.8+ getpeername hooks. They are
 	// optional: without them a redirected socket reports its listener token
 	// as the peer, as before.
@@ -249,7 +249,9 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 			return nil, eBPFOperationError("probe socket release attachment", err)
 		}
 	}
-	if socketReleaseSupported && features.HaveMapType(CiliumEBPF.SkStorage) == nil {
+	if socketReleaseSupported &&
+		features.HaveMapType(CiliumEBPF.SkStorage) == nil &&
+		features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnSkStorageGet) == nil {
 		skStorage = true
 	}
 	runtimeState := &cgroupRuntime{
