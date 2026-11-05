@@ -106,6 +106,17 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
         increment_stat(SB_TC_STAT_RETURN_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
+    if (existing != 0 &&
+        (existing->network_generation & SB_TC_RETURN_NETWORK_MASK) !=
+            (value.network_generation & SB_TC_RETURN_NETWORK_MASK)) {
+        // A handover leaves old routes for bounded userspace reclamation. A
+        // new incarnation may replace that stale route, but never overwrite a
+        // route belonging to the current network generation blindly.
+        if (map_update(&tc_return, &reverse, &value, BPF_ANY) != 0)
+            existing = 0;
+        else
+            existing = map_lookup(&tc_return, &reverse);
+    }
     if (existing == 0) {
         // Another CPU may publish this flow concurrently. Never overwrite a
         // different publisher (e.g. overlapping addresses on two LANs).
