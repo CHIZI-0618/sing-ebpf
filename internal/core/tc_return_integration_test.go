@@ -53,7 +53,7 @@ func TestTCReturnRouteLifetimeIntegration(t *testing.T) {
 	if err = returnMap.Put(thirdKey, value); err == nil {
 		t.Fatal("full HASH admitted an extra route")
 	}
-	result := TCAssignmentSweepResult{Complete: true, UsageKnown: true}
+	result := TCFlowSweepResult{Complete: true, UsageKnown: true}
 	if err = b.sweepReturnRoutesLocked(time.Nanosecond, 16, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestTCReturnRouteLifetimeIntegration(t *testing.T) {
 	}
 	second.Release()
 	alias.Release()
-	result = TCAssignmentSweepResult{Complete: true, UsageKnown: true}
+	result = TCFlowSweepResult{Complete: true, UsageKnown: true}
 	if err = b.sweepReturnRoutesLocked(time.Nanosecond, 16, &result); err != nil {
 		t.Fatal(err)
 	}

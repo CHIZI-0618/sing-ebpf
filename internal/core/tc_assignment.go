@@ -49,11 +49,11 @@ type TCAssignment struct {
 	Reserved          [4]byte
 }
 
-// TCAssignmentSweepResult describes one bounded cleanup pass. Entries are
+// TCFlowSweepResult describes one bounded cleanup pass. Entries are
 // removed after their kernel timestamp exceeds maxIdle and an immediate
 // value/generation recheck still matches. The per-map scan budget also applies
 // on batch-capable kernels; Complete covers assignment, return and fragments.
-type TCAssignmentSweepResult struct {
+type TCFlowSweepResult struct {
 	ReturnUsage      MapUsage
 	ReturnUsageKnown bool
 	ReturnScanned    uint32
@@ -72,11 +72,11 @@ type TCAssignmentSweepResult struct {
 }
 
 const (
-	TCAssignmentSweepFailureClosed     = "closed"
-	TCAssignmentSweepFailureScan       = "scan"
-	TCAssignmentSweepFailureLookup     = "lookup"
-	TCAssignmentSweepFailureDelete     = "delete"
-	TCAssignmentSweepFailureRetirement = "retirement_failed"
+	TCFlowSweepFailureClosed     = "closed"
+	TCFlowSweepFailureScan       = "scan"
+	TCFlowSweepFailureLookup     = "lookup"
+	TCFlowSweepFailureDelete     = "delete"
+	TCFlowSweepFailureRetirement = "retirement_failed"
 )
 
 type tcAssignmentSweepEntry struct {
@@ -202,14 +202,14 @@ func sameTCAssignment(left, right TCAssignment) bool {
 	return left == right
 }
 
-// SweepAssignments performs a bounded cleanup pass for TC assignments and
-// then delegates return-route and fragment cleanup to the paired stores.
-func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint32) (TCAssignmentSweepResult, error) {
+// SweepFlows performs a bounded cleanup pass for TC assignments and then
+// delegates return-route and fragment cleanup to the paired stores.
+func (b *TCBackend) SweepFlows(maxIdle time.Duration, fallbackBudget uint32) (TCFlowSweepResult, error) {
 	if b == nil {
-		return TCAssignmentSweepResult{Failure: TCAssignmentSweepFailureClosed}, errBackendClosed
+		return TCFlowSweepResult{Failure: TCFlowSweepFailureClosed}, errBackendClosed
 	}
 	if maxIdle <= 0 || fallbackBudget == 0 {
-		return TCAssignmentSweepResult{}, unix.EINVAL
+		return TCFlowSweepResult{}, unix.EINVAL
 	}
 	maxIdle = max(maxIdle, 2*time.Second)
 	b.flowStore.assignment.sweepAccess.Lock()
@@ -217,9 +217,9 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || b.runtime.maps["tc_assignment"] == nil || b.runtime.maps["tc_assignment_claim"] == nil {
-		return TCAssignmentSweepResult{Failure: TCAssignmentSweepFailureClosed}, errBackendClosed
+		return TCFlowSweepResult{Failure: TCFlowSweepFailureClosed}, errBackendClosed
 	}
-	result := TCAssignmentSweepResult{Usage: MapUsage{Capacity: b.flowStore.assignment.capacity}, FailureMap: "sb_tc_assign"}
+	result := TCFlowSweepResult{Usage: MapUsage{Capacity: b.flowStore.assignment.capacity}, FailureMap: "sb_tc_assign"}
 	now := monotonicNowNS()
 	staleBefore := now - min(now, uint64(maxIdle))
 	b.flowStore.assignment.candidates = b.flowStore.assignment.candidates[:0]
@@ -230,7 +230,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 			}
 		})
 	if err != nil {
-		result.Failure = TCAssignmentSweepFailureScan
+		result.Failure = TCFlowSweepFailureScan
 		return result, err
 	}
 	result.Scanned, result.Complete = scan.Scanned, scan.Complete
@@ -244,7 +244,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 				result.Missing++
 				continue
 			}
-			result.Failure = TCAssignmentSweepFailureLookup
+			result.Failure = TCFlowSweepFailureLookup
 			return result, err
 		}
 		if current.Generation != candidate.value.Generation || !sameTCAssignment(current, candidate.value) {
@@ -262,7 +262,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 				result.InFlight++
 				continue
 			}
-			result.Failure = TCAssignmentSweepFailureLookup
+			result.Failure = TCFlowSweepFailureLookup
 			return result, claimErr
 		}
 		var fenced TCAssignment
@@ -272,7 +272,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 				result.Missing++
 				continue
 			}
-			result.Failure = TCAssignmentSweepFailureLookup
+			result.Failure = TCFlowSweepFailureLookup
 			return result, err
 		}
 		if !sameTCAssignment(fenced, candidate.value) || (fenced.NetworkGeneration == b.control.NetworkGeneration && fenced.LastSeenNS > staleBefore) {
@@ -282,7 +282,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 		}
 		if err = deleteMap(b.flowStore.assignment.mapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
 			_ = claimMap.Delete(&candidate.key)
-			result.Failure = TCAssignmentSweepFailureDelete
+			result.Failure = TCFlowSweepFailureDelete
 			return result, err
 		}
 		_ = claimMap.Delete(&candidate.key)

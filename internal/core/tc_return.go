@@ -171,11 +171,11 @@ func (b *TCBackend) ReleaseReturnRoute(handle TCReturnHandle) {
 
 // Caller holds b.access. The reference lock serializes acquisition with idle
 // cleanup, so a live consumer cannot lose its route to a maintenance pass.
-func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32, result *TCAssignmentSweepResult) error {
+func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32, result *TCFlowSweepResult) error {
 	result.FailureMap = "sb_tc_return"
 	returnMap := b.runtime.maps["tc_return"]
 	if returnMap == nil {
-		result.Failure = TCAssignmentSweepFailureClosed
+		result.Failure = TCFlowSweepFailureClosed
 		return errBackendClosed
 	}
 	now := monotonicNowNS()
@@ -192,7 +192,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		}
 	})
 	if err != nil {
-		result.Failure = TCAssignmentSweepFailureScan
+		result.Failure = TCFlowSweepFailureScan
 		return err
 	}
 	result.ReturnScanned = scan.Scanned
@@ -230,7 +230,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 			}
 		})
 		if err != nil {
-			result.Failure = TCAssignmentSweepFailureScan
+			result.Failure = TCFlowSweepFailureScan
 			return err
 		}
 		result.Complete = result.Complete && scan.Complete
@@ -239,12 +239,12 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 			if err = fragmentMap.Lookup(&entry.key, &current); errors.Is(err, unix.ENOENT) {
 				continue
 			} else if err != nil {
-				result.Failure = TCAssignmentSweepFailureLookup
+				result.Failure = TCFlowSweepFailureLookup
 				return err
 			}
 			if current == entry.value {
 				if err = fragmentMap.Delete(&entry.key); err != nil && !errors.Is(err, unix.ENOENT) {
-					result.Failure = TCAssignmentSweepFailureDelete
+					result.Failure = TCFlowSweepFailureDelete
 					return err
 				}
 			}
@@ -263,21 +263,21 @@ func (b *TCBackend) deleteIdleReturnRoute(returnMap *CiliumEBPF.Map, key tcAssig
 	if err := returnMap.Lookup(&key, &current); errors.Is(err, unix.ENOENT) {
 		return false, "", nil
 	} else if err != nil {
-		return false, TCAssignmentSweepFailureLookup, err
+		return false, TCFlowSweepFailureLookup, err
 	}
 	if current != expected {
 		return false, "", nil
 	}
 	current.NetworkGeneration |= tcReturnRetiring
 	if err := returnMap.Update(&key, &current, CiliumEBPF.UpdateAny); err != nil {
-		return false, TCAssignmentSweepFailureLookup, err
+		return false, TCFlowSweepFailureLookup, err
 	}
 	var fenced tcReturnValue
 	if err := returnMap.Lookup(&key, &fenced); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return false, "", nil
 		}
-		return false, TCAssignmentSweepFailureLookup, err
+		return false, TCFlowSweepFailureLookup, err
 	}
 	if !sameTCReturnRoute(fenced, expected) || fenced.NetworkGeneration&tcReturnRetiring == 0 {
 		return false, "", nil
@@ -285,7 +285,7 @@ func (b *TCBackend) deleteIdleReturnRoute(returnMap *CiliumEBPF.Map, key tcAssig
 	if err := returnMap.Delete(&key); errors.Is(err, unix.ENOENT) {
 		return false, "", nil
 	} else if err != nil {
-		return false, TCAssignmentSweepFailureDelete, err
+		return false, TCFlowSweepFailureDelete, err
 	}
 	return true, "", nil
 }

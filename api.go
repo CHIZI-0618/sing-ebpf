@@ -34,7 +34,7 @@ type (
 	SharedPacketRewriteSweepResult = core.SharedPacketRewriteSweepResult
 	TCAssignment                   = core.TCAssignment
 	TCReturnHandle                 = core.TCReturnHandle
-	TCAssignmentSweepResult        = core.TCAssignmentSweepResult
+	TCFlowSweepResult              = core.TCFlowSweepResult
 	TCStats                        = core.TCStats
 	TCLinkFraming                  = core.TCLinkFraming
 	AttachmentInfo                 = core.AttachmentInfo
@@ -330,8 +330,8 @@ func (b *TCBackend) RemoveAssignmentIfMatch(protocol uint8, source, destination 
 	return core.UnwrapTCBackend(b).RemoveAssignmentIfMatch(protocol, source, destination, interfaceIndex, expected)
 }
 
-func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint32) (TCAssignmentSweepResult, error) {
-	return core.UnwrapTCBackend(b).SweepAssignments(maxIdle, fallbackBudget)
+func (b *TCBackend) SweepFlows(maxIdle time.Duration, fallbackBudget uint32) (TCFlowSweepResult, error) {
+	return core.UnwrapTCBackend(b).SweepFlows(maxIdle, fallbackBudget)
 }
 
 func (b *TCBackend) Stats() (TCStats, error) {

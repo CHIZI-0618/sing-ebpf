@@ -226,7 +226,7 @@ func TestRemoveAssignmentIfMatchFollowsActivityRefresh(t *testing.T) {
 	}
 }
 
-func TestSweepAssignmentsRemovesOnlyUnchangedStaleEntries(t *testing.T) {
+func TestSweepFlowsRemovesOnlyUnchangedStaleEntries(t *testing.T) {
 	backend := newTestAssignmentBackend(t)
 	backend.flowStore.assignment.capacity = 64
 	source := netip.MustParseAddrPort("192.0.2.10:53000")
@@ -252,7 +252,7 @@ func TestSweepAssignmentsRemovesOnlyUnchangedStaleEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := backend.SweepAssignments(time.Second, 64)
+	result, err := backend.SweepFlows(time.Second, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestSweepAssignmentsRemovesOnlyUnchangedStaleEntries(t *testing.T) {
 	}
 }
 
-func TestSweepAssignmentsPreservesCoalescedActivity(t *testing.T) {
+func TestSweepFlowsPreservesCoalescedActivity(t *testing.T) {
 	backend := newTestAssignmentBackend(t)
 	backend.flowStore.assignment.capacity = 64
 	source := netip.MustParseAddrPort("192.0.2.10:53000")
@@ -283,7 +283,7 @@ func TestSweepAssignmentsPreservesCoalescedActivity(t *testing.T) {
 
 	// A caller's subsecond timeout must not mistake the native one-second
 	// write coalescing window for inactivity, for either map.
-	result, err := backend.SweepAssignments(time.Nanosecond, 64)
+	result, err := backend.SweepFlows(time.Nanosecond, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestSweepAssignmentsPreservesCoalescedActivity(t *testing.T) {
 	}
 }
 
-func TestSweepAssignmentsPreservesPublishingClaim(t *testing.T) {
+func TestSweepFlowsPreservesPublishingClaim(t *testing.T) {
 	backend := newTestAssignmentBackend(t)
 	backend.flowStore.assignment.capacity = 64
 	source := netip.MustParseAddrPort("192.0.2.10:53000")
@@ -316,7 +316,7 @@ func TestSweepAssignmentsPreservesPublishingClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := backend.SweepAssignments(time.Second, 64)
+	result, err := backend.SweepFlows(time.Second, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,16 +325,16 @@ func TestSweepAssignmentsPreservesPublishingClaim(t *testing.T) {
 	}
 }
 
-func TestSweepAssignmentsPreservesReturnFailureMap(t *testing.T) {
+func TestSweepFlowsPreservesReturnFailureMap(t *testing.T) {
 	backend := newTestAssignmentBackend(t)
 	backend.flowStore.assignment.capacity = 64
 	delete(backend.runtime.maps, "tc_return")
 
-	result, err := backend.SweepAssignments(time.Second, 64)
+	result, err := backend.SweepFlows(time.Second, 64)
 	if err == nil {
 		t.Fatal("sweep without the return map succeeded")
 	}
-	if result.Failure != TCAssignmentSweepFailureClosed || result.FailureMap != "sb_tc_return" {
+	if result.Failure != TCFlowSweepFailureClosed || result.FailureMap != "sb_tc_return" {
 		t.Fatalf("sweep failure = %+v, want closed sb_tc_return", result)
 	}
 }
