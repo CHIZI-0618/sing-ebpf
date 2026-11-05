@@ -146,36 +146,27 @@ type tcRuntime struct {
 }
 
 type TCBackend struct {
-	access                    sync.RWMutex
-	health                    backendHealth
-	runtime                   *tcRuntime
-	tcpListenerMap            bool
-	programsExposed           bool
-	control                   tcControl
-	controlMapFD              int
-	assignmentMapFD           int
-	assignmentCapacity        uint32
-	assignmentSweepAccess     sync.Mutex
-	assignmentSweepRemoved    uint32
-	returnSweepRemoved        uint32
-	assignmentSweepScratch    mapScanScratch[tcAssignKey, TCAssignment]
-	assignmentSweepCandidates []tcAssignmentSweepEntry
-	selfMapExternal           bool
-	bypassIPv4                []netip.Prefix
-	bypassIPv6                []netip.Prefix
-	sharedBypassIPv4          []netip.Prefix
-	sharedBypassIPv6          []netip.Prefix
-	hostIPv4                  [][4]byte
-	hostIPv6                  [][16]byte
+	access           sync.RWMutex
+	health           backendHealth
+	runtime          *tcRuntime
+	tcpListenerMap   bool
+	programsExposed  bool
+	control          tcControl
+	controlMapFD     int
+	assignment       tcAssignmentStore
+	returns          tcReturnStore
+	selfMapExternal  bool
+	bypassIPv4       []netip.Prefix
+	bypassIPv6       []netip.Prefix
+	sharedBypassIPv4 []netip.Prefix
+	sharedBypassIPv6 []netip.Prefix
+	hostIPv4         [][4]byte
+	hostIPv6         [][16]byte
 	// icmpEchoReply is nil unless TCConfig.ICMPEchoReply was set; see
 	// tc_icmp_echo_reply.go. It is a standalone backend (ICMPEchoReplyBackend) rather
 	// than fields inline here because shared.data_plane: packet_rewrite hosts
 	// the same native object with no TCBackend of its own to hold it in.
-	icmpEchoReply              *ICMPEchoReplyBackend
-	returnAccess               sync.Mutex
-	returnReferences           map[tcReturnReference]uint32
-	returnSweepScratch         mapScanScratch[tcAssignKey, tcReturnValue]
-	returnFragmentSweepScratch mapScanScratch[tcAssignKey, tcReturnValue]
+	icmpEchoReply *ICMPEchoReplyBackend
 	// tcpListenerModes records, per listener family, whether the registered
 	// listener is in the SOCKMAP or is found by port because it is MPTCP.
 	tcpListenerModes [tcListenerCount]uint8
@@ -300,13 +291,15 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		controlValue.Flags |= tcFlagSharedBypassIPv6
 	}
 	backend := &TCBackend{
-		runtime:            &tcRuntime{maps: maps, programs: loadedPrograms},
-		tcpListenerMap:     config.EnableTCP && !legacyTCP,
-		control:            controlValue,
-		controlMapFD:       maps["tc_control"].FD(),
-		assignmentMapFD:    maps["tc_assignment"].FD(),
-		assignmentCapacity: config.AssignmentCapacity,
-		selfMapExternal:    config.EnableLocal && config.SelfBypassMap != nil,
+		runtime:        &tcRuntime{maps: maps, programs: loadedPrograms},
+		tcpListenerMap: config.EnableTCP && !legacyTCP,
+		control:        controlValue,
+		controlMapFD:   maps["tc_control"].FD(),
+		assignment: tcAssignmentStore{
+			mapFD:    maps["tc_assignment"].FD(),
+			capacity: config.AssignmentCapacity,
+		},
+		selfMapExternal: config.EnableLocal && config.SelfBypassMap != nil,
 	}
 	// From here, backend owns maps and loadedPrograms: giving up on either of the
 	// steps below has to close it rather than just returning the step's error, or
@@ -1003,17 +996,8 @@ func (b *TCBackend) Close() error {
 	b.icmpEchoReply = nil
 	b.runtime = nil
 	b.controlMapFD = -1
-	b.assignmentMapFD = -1
-	b.assignmentCapacity = 0
-	b.assignmentSweepCandidates = nil
-	b.assignmentSweepRemoved = 0
-	b.returnSweepRemoved = 0
-	b.assignmentSweepScratch = mapScanScratch[tcAssignKey, TCAssignment]{}
-	b.returnAccess.Lock()
-	b.returnReferences = nil
-	b.returnSweepScratch = mapScanScratch[tcAssignKey, tcReturnValue]{}
-	b.returnFragmentSweepScratch = mapScanScratch[tcAssignKey, tcReturnValue]{}
-	b.returnAccess.Unlock()
+	b.assignment = tcAssignmentStore{}
+	b.returns = tcReturnStore{}
 	b.selfMapExternal = false
 	b.bypassIPv4 = nil
 	b.bypassIPv6 = nil

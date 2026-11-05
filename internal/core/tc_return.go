@@ -5,6 +5,7 @@ package core
 import (
 	"errors"
 	"net/netip"
+	"sync"
 	"time"
 
 	CiliumEBPF "github.com/cilium/ebpf"
@@ -29,6 +30,16 @@ type tcReturnReference struct {
 	generation uint64
 }
 
+// tcReturnStore owns tuple-preserving return routes, their consumer claims,
+// and the bounded cleanup cursors for return and fragment maps.
+type tcReturnStore struct {
+	access          sync.Mutex
+	references      map[tcReturnReference]uint32
+	sweepRemoved    uint32
+	sweepScratch    mapScanScratch[tcAssignKey, tcReturnValue]
+	fragmentScratch mapScanScratch[tcAssignKey, tcReturnValue]
+}
+
 // TCReturnHandle pins a tuple-preserving return route for one consumer. Every
 // successful acquire must be released once, after the consumer stops writing.
 // It is opaque and cannot be shared between backends or reconstructed by callers.
@@ -45,11 +56,11 @@ func (h TCReturnHandle) Release() {
 }
 
 func (b *TCBackend) retainReturnRouteLocked(key tcAssignKey, value tcReturnValue) TCReturnHandle {
-	if b.returnReferences == nil {
-		b.returnReferences = make(map[tcReturnReference]uint32)
+	if b.returns.references == nil {
+		b.returns.references = make(map[tcReturnReference]uint32)
 	}
 	ref := tcReturnReference{key: key, generation: value.Generation}
-	b.returnReferences[ref]++
+	b.returns.references[ref]++
 	return TCReturnHandle{reference: ref, owner: b}
 }
 
@@ -66,8 +77,8 @@ func (b *TCBackend) AcquireReturnRoute(protocol uint8, source, destination netip
 	if b.runtime == nil || b.runtime.maps["tc_return"] == nil {
 		return TCReturnHandle{}, errBackendClosed
 	}
-	b.returnAccess.Lock()
-	defer b.returnAccess.Unlock()
+	b.returns.access.Lock()
+	defer b.returns.access.Unlock()
 	var value tcReturnValue
 	if err = b.runtime.maps["tc_return"].Lookup(&key, &value); err != nil {
 		return TCReturnHandle{}, err
@@ -96,10 +107,10 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	if b.runtime == nil || b.runtime.maps["tc_return"] == nil {
 		return TCReturnHandle{}, errBackendClosed
 	}
-	b.returnAccess.Lock()
-	defer b.returnAccess.Unlock()
+	b.returns.access.Lock()
+	defer b.returns.access.Unlock()
 	ref := original.reference
-	if original.owner != b || ref.key.Protocol != ProtocolUDP || b.returnReferences[ref] == 0 {
+	if original.owner != b || ref.key.Protocol != ProtocolUDP || b.returns.references[ref] == 0 {
 		return TCReturnHandle{}, E.New("TC return route is not retained")
 	}
 	client := netip.AddrFrom16(ref.key.DestinationAddress)
@@ -146,13 +157,13 @@ func (b *TCBackend) ReleaseReturnRoute(handle TCReturnHandle) {
 	if b == nil || handle.owner != b || !handle.IsValid() {
 		return
 	}
-	b.returnAccess.Lock()
-	defer b.returnAccess.Unlock()
+	b.returns.access.Lock()
+	defer b.returns.access.Unlock()
 	ref := handle.reference
-	if count := b.returnReferences[ref]; count > 1 {
-		b.returnReferences[ref] = count - 1
+	if count := b.returns.references[ref]; count > 1 {
+		b.returns.references[ref] = count - 1
 	} else {
-		delete(b.returnReferences, ref)
+		delete(b.returns.references, ref)
 	}
 	// Keep the kernel record through FIN/ACK and delayed UDP replies. The
 	// janitor reclaims it only after the activity grace, never on last release.
@@ -174,7 +185,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		value tcReturnValue
 	}
 	var candidates []candidate
-	scan, err := b.returnSweepScratch.scan(returnMap, b.assignmentCapacity, budget, func(key tcAssignKey, value tcReturnValue) {
+	scan, err := b.returns.sweepScratch.scan(returnMap, b.assignment.capacity, budget, func(key tcAssignKey, value tcReturnValue) {
 		if value.NetworkGeneration&0x7fffffff != b.control.NetworkGeneration ||
 			(value.LastSeenNS != 0 && value.LastSeenNS <= staleBefore) {
 			candidates = append(candidates, candidate{key, value})
@@ -186,7 +197,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	}
 	result.ReturnScanned = scan.Scanned
 	if scan.Restarted {
-		b.returnSweepRemoved = 0
+		b.returns.sweepRemoved = 0
 	}
 	result.Complete = result.Complete && scan.Complete
 	for _, entry := range candidates {
@@ -199,13 +210,13 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		}
 		if removed {
 			result.ReturnRemoved++
-			b.returnSweepRemoved++
+			b.returns.sweepRemoved++
 		}
 	}
 	if scan.Complete {
 		result.ReturnUsageKnown = true
-		result.ReturnUsage = MapUsage{Capacity: b.assignmentCapacity, Entries: scan.Entries - min(scan.Entries, b.returnSweepRemoved)}
-		b.returnSweepRemoved = 0
+		result.ReturnUsage = MapUsage{Capacity: b.assignment.capacity, Entries: scan.Entries - min(scan.Entries, b.returns.sweepRemoved)}
+		b.returns.sweepRemoved = 0
 		result.Pressure = result.Pressure || uint64(result.ReturnUsage.Entries)*100 >= uint64(result.ReturnUsage.Capacity)*70
 	}
 	// Fragment cache entries have a fixed short lifetime and no userspace
@@ -213,7 +224,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	if fragmentMap := b.runtime.maps["tc_return_frag"]; fragmentMap != nil {
 		result.FailureMap = "sb_tc_rfrag"
 		candidates = candidates[:0]
-		scan, err = b.returnFragmentSweepScratch.scan(fragmentMap, min(b.assignmentCapacity, 1024), budget, func(key tcAssignKey, value tcReturnValue) {
+		scan, err = b.returns.fragmentScratch.scan(fragmentMap, min(b.assignment.capacity, 1024), budget, func(key tcAssignKey, value tcReturnValue) {
 			if now > value.LastSeenNS && now-value.LastSeenNS > uint64(2*time.Second) {
 				candidates = append(candidates, candidate{key, value})
 			}
@@ -243,9 +254,9 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 }
 
 func (b *TCBackend) deleteIdleReturnRoute(returnMap *CiliumEBPF.Map, key tcAssignKey, expected tcReturnValue) (bool, string, error) {
-	b.returnAccess.Lock()
-	defer b.returnAccess.Unlock()
-	if b.returnReferences[tcReturnReference{key, expected.Generation}] != 0 {
+	b.returns.access.Lock()
+	defer b.returns.access.Unlock()
+	if b.returns.references[tcReturnReference{key, expected.Generation}] != 0 {
 		return false, "", nil
 	}
 	var current tcReturnValue

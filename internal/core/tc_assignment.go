@@ -5,6 +5,7 @@ package core
 import (
 	"errors"
 	"net/netip"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -83,6 +84,19 @@ type tcAssignmentSweepEntry struct {
 	value TCAssignment
 }
 
+// tcAssignmentStore owns the kernel assignment map and all userspace state
+// needed to inspect it. Keeping the scan cursor, candidate buffer and removal
+// accounting with the map prevents the TC runtime from accumulating flow-store
+// details as return routes and fragment state are refactored next.
+type tcAssignmentStore struct {
+	mapFD        int
+	capacity     uint32
+	sweepAccess  sync.Mutex
+	sweepRemoved uint32
+	sweepScratch mapScanScratch[tcAssignKey, TCAssignment]
+	candidates   []tcAssignmentSweepEntry
+}
+
 func makeTCAssignKey(protocol uint8, source, destination netip.AddrPort, interfaceIndex uint32) (tcAssignKey, error) {
 	var key tcAssignKey
 	if !source.IsValid() || !destination.IsValid() || source.Addr().Is4() != destination.Addr().Is4() {
@@ -117,14 +131,14 @@ func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.A
 		return TCAssignment{}, errBackendClosed
 	}
 	var assignment TCAssignment
-	if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&assignment)); err != nil {
+	if err = lookupMap(b.assignment.mapFD, unsafe.Pointer(&key), unsafe.Pointer(&assignment)); err != nil {
 		return TCAssignment{}, err
 	}
 	if assignment.NetworkGeneration != b.control.NetworkGeneration {
 		return TCAssignment{}, unix.ENOENT
 	}
 	if remove {
-		_ = deleteMap(b.assignmentMapFD, unsafe.Pointer(&key))
+		_ = deleteMap(b.assignment.mapFD, unsafe.Pointer(&key))
 	}
 	return assignment, nil
 }
@@ -143,7 +157,7 @@ func (b *TCBackend) RemoveAssignmentIfMatch(protocol uint8, source, destination 
 		return false, errBackendClosed
 	}
 	var current TCAssignment
-	if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&current)); err != nil {
+	if err = lookupMap(b.assignment.mapFD, unsafe.Pointer(&key), unsafe.Pointer(&current)); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return false, nil
 		}
@@ -165,7 +179,7 @@ func (b *TCBackend) RemoveAssignmentIfMatch(protocol uint8, source, destination 
 	}
 	defer claimMap.Delete(&key)
 	var fenced TCAssignment
-	if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&fenced)); err != nil {
+	if err = lookupMap(b.assignment.mapFD, unsafe.Pointer(&key), unsafe.Pointer(&fenced)); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return false, nil
 		}
@@ -174,7 +188,7 @@ func (b *TCBackend) RemoveAssignmentIfMatch(protocol uint8, source, destination 
 	if !sameTCAssignment(fenced, expected) {
 		return false, nil
 	}
-	if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&key)); err != nil {
+	if err = deleteMap(b.assignment.mapFD, unsafe.Pointer(&key)); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return false, nil
 		}
@@ -198,21 +212,21 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 		return TCAssignmentSweepResult{}, unix.EINVAL
 	}
 	maxIdle = max(maxIdle, 2*time.Second)
-	b.assignmentSweepAccess.Lock()
-	defer b.assignmentSweepAccess.Unlock()
+	b.assignment.sweepAccess.Lock()
+	defer b.assignment.sweepAccess.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || b.runtime.maps["tc_assignment"] == nil || b.runtime.maps["tc_assignment_claim"] == nil {
 		return TCAssignmentSweepResult{Failure: TCAssignmentSweepFailureClosed}, errBackendClosed
 	}
-	result := TCAssignmentSweepResult{Usage: MapUsage{Capacity: b.assignmentCapacity}, FailureMap: "sb_tc_assign"}
+	result := TCAssignmentSweepResult{Usage: MapUsage{Capacity: b.assignment.capacity}, FailureMap: "sb_tc_assign"}
 	now := monotonicNowNS()
 	staleBefore := now - min(now, uint64(maxIdle))
-	b.assignmentSweepCandidates = b.assignmentSweepCandidates[:0]
-	scan, err := b.assignmentSweepScratch.scan(b.runtime.maps["tc_assignment"], b.assignmentCapacity, fallbackBudget,
+	b.assignment.candidates = b.assignment.candidates[:0]
+	scan, err := b.assignment.sweepScratch.scan(b.runtime.maps["tc_assignment"], b.assignment.capacity, fallbackBudget,
 		func(key tcAssignKey, value TCAssignment) {
 			if value.NetworkGeneration != b.control.NetworkGeneration || (value.LastSeenNS != 0 && value.LastSeenNS <= staleBefore) {
-				b.assignmentSweepCandidates = append(b.assignmentSweepCandidates, tcAssignmentSweepEntry{key: key, value: value})
+				b.assignment.candidates = append(b.assignment.candidates, tcAssignmentSweepEntry{key: key, value: value})
 			}
 		})
 	if err != nil {
@@ -221,11 +235,11 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 	}
 	result.Scanned, result.Complete = scan.Scanned, scan.Complete
 	if scan.Restarted {
-		b.assignmentSweepRemoved = 0
+		b.assignment.sweepRemoved = 0
 	}
-	for _, candidate := range b.assignmentSweepCandidates {
+	for _, candidate := range b.assignment.candidates {
 		var current TCAssignment
-		if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&current)); err != nil {
+		if err = lookupMap(b.assignment.mapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&current)); err != nil {
 			if errors.Is(err, unix.ENOENT) {
 				result.Missing++
 				continue
@@ -252,7 +266,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 			return result, claimErr
 		}
 		var fenced TCAssignment
-		if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&fenced)); err != nil {
+		if err = lookupMap(b.assignment.mapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&fenced)); err != nil {
 			_ = claimMap.Delete(&candidate.key)
 			if errors.Is(err, unix.ENOENT) {
 				result.Missing++
@@ -266,18 +280,18 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 			result.InFlight++
 			continue
 		}
-		if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
+		if err = deleteMap(b.assignment.mapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
 			_ = claimMap.Delete(&candidate.key)
 			result.Failure = TCAssignmentSweepFailureDelete
 			return result, err
 		}
 		_ = claimMap.Delete(&candidate.key)
 		result.Removed++
-		b.assignmentSweepRemoved++
+		b.assignment.sweepRemoved++
 	}
 	if result.Complete {
-		result.Usage.Entries = scan.Entries - min(scan.Entries, b.assignmentSweepRemoved)
-		b.assignmentSweepRemoved = 0
+		result.Usage.Entries = scan.Entries - min(scan.Entries, b.assignment.sweepRemoved)
+		b.assignment.sweepRemoved = 0
 		result.UsageKnown = true
 		result.Pressure = uint64(result.Usage.Entries)*100 >= uint64(result.Usage.Capacity)*70
 	}
