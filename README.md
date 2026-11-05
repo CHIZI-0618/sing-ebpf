@@ -19,6 +19,26 @@ The final-action policy boundary and consumer integration contract are in
 Build, generation, testing, debugging, and contribution procedures are in
 [DEVELOPING.md](DEVELOPING.md).
 
+## Release status
+
+The first beta is a compatibility release, not a stable ABI promise. The
+supported contract is the value-level policy, lifecycle, capability, and
+diagnostic surface documented here; generated objects and their Go/C ABI must
+be released together. `cgroup` and shared `packet_rewrite` are the
+compatibility-oriented paths. `socket_assign` is still experimental and needs
+namespace, veth, TC, and socket-assignment support from the target kernel.
+
+The release validation matrix covers a restricted 4.19.325 profile, cgroup
+and packet-rewrite paths on 5.4, and the full namespace/TC paths on 5.10 and
+6.6. These are pinned validation targets, not a promise that every vendor
+kernel with the same version works. A deployment is supported only after the
+selected data plane passes the non-attaching probe and a real startup/traffic
+and graceful-shutdown check on that device.
+
+Consumers should pin the exact module revision selected for the release. The
+Go ABI, generated objects, and source/object manifest are one release unit;
+do not copy an object or generated binding from another revision.
+
 ## Package boundary
 
 The dependency direction is enforced:
@@ -97,9 +117,10 @@ IPv6 listener or change its policy. Optional cgroup self-bypass/process
 tracking is not a mandatory dependency of socket assignment. Missing
 capabilities fail startup explicitly; no mechanism silently changes.
 
-The library has three mechanisms and four selectable scope paths: local `socket_assign` or `cgroup`, and
-shared `socket_assign` or `packet_rewrite`. A consumer may enable either path
-independently. Exported capability probes can load and close selected generated
+The library has three mechanisms and four selectable scope paths: local
+`socket_assign` or `cgroup`, and shared `socket_assign` or `packet_rewrite`.
+A consumer may enable either path independently. Exported capability probes can
+load and close selected generated
 objects without attaching them, but attachment and network-state validation
 still require a real runtime startup.
 
@@ -550,7 +571,9 @@ The Go packages require Linux or Android and the `with_ebpf` build tag. Normal
 builds use the checked-in generated objects and do not require cgo, bpftool,
 kernel BTF, or an Android NDK.
 
-Generated objects use Android NDK r29 Clang 21:
+Generated objects use Android NDK r29 Clang 21. Consumers use the checked-in
+objects and do not need the NDK or a C toolchain; maintainers should use the
+Go toolchain required by the consuming sing-box/upstream branch:
 
 ```bash
 make generate
