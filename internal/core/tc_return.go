@@ -56,11 +56,11 @@ func (h TCReturnHandle) Release() {
 }
 
 func (b *TCBackend) retainReturnRouteLocked(key tcAssignKey, value tcReturnValue) TCReturnHandle {
-	if b.returns.references == nil {
-		b.returns.references = make(map[tcReturnReference]uint32)
+	if b.flowStore.returns.references == nil {
+		b.flowStore.returns.references = make(map[tcReturnReference]uint32)
 	}
 	ref := tcReturnReference{key: key, generation: value.Generation}
-	b.returns.references[ref]++
+	b.flowStore.returns.references[ref]++
 	return TCReturnHandle{reference: ref, owner: b}
 }
 
@@ -77,8 +77,8 @@ func (b *TCBackend) AcquireReturnRoute(protocol uint8, source, destination netip
 	if b.runtime == nil || b.runtime.maps["tc_return"] == nil {
 		return TCReturnHandle{}, errBackendClosed
 	}
-	b.returns.access.Lock()
-	defer b.returns.access.Unlock()
+	b.flowStore.returns.access.Lock()
+	defer b.flowStore.returns.access.Unlock()
 	var value tcReturnValue
 	if err = b.runtime.maps["tc_return"].Lookup(&key, &value); err != nil {
 		return TCReturnHandle{}, err
@@ -107,10 +107,10 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	if b.runtime == nil || b.runtime.maps["tc_return"] == nil {
 		return TCReturnHandle{}, errBackendClosed
 	}
-	b.returns.access.Lock()
-	defer b.returns.access.Unlock()
+	b.flowStore.returns.access.Lock()
+	defer b.flowStore.returns.access.Unlock()
 	ref := original.reference
-	if original.owner != b || ref.key.Protocol != ProtocolUDP || b.returns.references[ref] == 0 {
+	if original.owner != b || ref.key.Protocol != ProtocolUDP || b.flowStore.returns.references[ref] == 0 {
 		return TCReturnHandle{}, E.New("TC return route is not retained")
 	}
 	client := netip.AddrFrom16(ref.key.DestinationAddress)
@@ -157,13 +157,13 @@ func (b *TCBackend) ReleaseReturnRoute(handle TCReturnHandle) {
 	if b == nil || handle.owner != b || !handle.IsValid() {
 		return
 	}
-	b.returns.access.Lock()
-	defer b.returns.access.Unlock()
+	b.flowStore.returns.access.Lock()
+	defer b.flowStore.returns.access.Unlock()
 	ref := handle.reference
-	if count := b.returns.references[ref]; count > 1 {
-		b.returns.references[ref] = count - 1
+	if count := b.flowStore.returns.references[ref]; count > 1 {
+		b.flowStore.returns.references[ref] = count - 1
 	} else {
-		delete(b.returns.references, ref)
+		delete(b.flowStore.returns.references, ref)
 	}
 	// Keep the kernel record through FIN/ACK and delayed UDP replies. The
 	// janitor reclaims it only after the activity grace, never on last release.
@@ -185,7 +185,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		value tcReturnValue
 	}
 	var candidates []candidate
-	scan, err := b.returns.sweepScratch.scan(returnMap, b.assignment.capacity, budget, func(key tcAssignKey, value tcReturnValue) {
+	scan, err := b.flowStore.returns.sweepScratch.scan(returnMap, b.flowStore.assignment.capacity, budget, func(key tcAssignKey, value tcReturnValue) {
 		if value.NetworkGeneration&0x7fffffff != b.control.NetworkGeneration ||
 			(value.LastSeenNS != 0 && value.LastSeenNS <= staleBefore) {
 			candidates = append(candidates, candidate{key, value})
@@ -197,7 +197,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	}
 	result.ReturnScanned = scan.Scanned
 	if scan.Restarted {
-		b.returns.sweepRemoved = 0
+		b.flowStore.returns.sweepRemoved = 0
 	}
 	result.Complete = result.Complete && scan.Complete
 	for _, entry := range candidates {
@@ -210,13 +210,13 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		}
 		if removed {
 			result.ReturnRemoved++
-			b.returns.sweepRemoved++
+			b.flowStore.returns.sweepRemoved++
 		}
 	}
 	if scan.Complete {
 		result.ReturnUsageKnown = true
-		result.ReturnUsage = MapUsage{Capacity: b.assignment.capacity, Entries: scan.Entries - min(scan.Entries, b.returns.sweepRemoved)}
-		b.returns.sweepRemoved = 0
+		result.ReturnUsage = MapUsage{Capacity: b.flowStore.assignment.capacity, Entries: scan.Entries - min(scan.Entries, b.flowStore.returns.sweepRemoved)}
+		b.flowStore.returns.sweepRemoved = 0
 		result.Pressure = result.Pressure || uint64(result.ReturnUsage.Entries)*100 >= uint64(result.ReturnUsage.Capacity)*70
 	}
 	// Fragment cache entries have a fixed short lifetime and no userspace
@@ -224,7 +224,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	if fragmentMap := b.runtime.maps["tc_return_frag"]; fragmentMap != nil {
 		result.FailureMap = "sb_tc_rfrag"
 		candidates = candidates[:0]
-		scan, err = b.returns.fragmentScratch.scan(fragmentMap, min(b.assignment.capacity, 1024), budget, func(key tcAssignKey, value tcReturnValue) {
+		scan, err = b.flowStore.returns.fragmentScratch.scan(fragmentMap, min(b.flowStore.assignment.capacity, 1024), budget, func(key tcAssignKey, value tcReturnValue) {
 			if now > value.LastSeenNS && now-value.LastSeenNS > uint64(2*time.Second) {
 				candidates = append(candidates, candidate{key, value})
 			}
@@ -254,9 +254,9 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 }
 
 func (b *TCBackend) deleteIdleReturnRoute(returnMap *CiliumEBPF.Map, key tcAssignKey, expected tcReturnValue) (bool, string, error) {
-	b.returns.access.Lock()
-	defer b.returns.access.Unlock()
-	if b.returns.references[tcReturnReference{key, expected.Generation}] != 0 {
+	b.flowStore.returns.access.Lock()
+	defer b.flowStore.returns.access.Unlock()
+	if b.flowStore.returns.references[tcReturnReference{key, expected.Generation}] != 0 {
 		return false, "", nil
 	}
 	var current tcReturnValue

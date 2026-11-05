@@ -22,7 +22,7 @@ func TestTCReturnRouteLifetimeIntegration(t *testing.T) {
 	}
 	defer returnMap.Close()
 	b.runtime.maps["tc_return"] = returnMap
-	b.assignment.capacity = 2
+	b.flowStore.assignment.capacity = 2
 	source, destination := netip.MustParseAddrPort("192.0.2.2:41000"), netip.MustParseAddrPort("203.0.113.10:9681")
 	key, _ := makeTCAssignKey(ProtocolUDP, destination, source, 0)
 	value := tcReturnValue{LastSeenNS: 1, Generation: 42, InterfaceIndex: 7, Flags: 1}
@@ -44,7 +44,7 @@ func TestTCReturnRouteLifetimeIntegration(t *testing.T) {
 	foreign := &TCBackend{}
 	foreign.ReleaseReturnRoute(first)
 	first.Release()
-	if b.returns.references[second.reference] != 1 {
+	if b.flowStore.returns.references[second.reference] != 1 {
 		t.Fatal("wrong reference ownership/count")
 	}
 	// A full map rejects new flows without evicting either retained route.
@@ -83,7 +83,7 @@ func TestTCReturnRouteLifetimeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	second.Release()
-	if b.returns.references[current.reference] != 1 {
+	if b.flowStore.returns.references[current.reference] != 1 {
 		t.Fatal("stale generation released current owner")
 	}
 	current.Release()

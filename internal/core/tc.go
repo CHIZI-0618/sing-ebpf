@@ -153,8 +153,7 @@ type TCBackend struct {
 	programsExposed  bool
 	control          tcControl
 	controlMapFD     int
-	assignment       tcAssignmentStore
-	returns          tcReturnStore
+	flowStore        tcFlowStore
 	selfMapExternal  bool
 	bypassIPv4       []netip.Prefix
 	bypassIPv6       []netip.Prefix
@@ -295,9 +294,11 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		tcpListenerMap: config.EnableTCP && !legacyTCP,
 		control:        controlValue,
 		controlMapFD:   maps["tc_control"].FD(),
-		assignment: tcAssignmentStore{
-			mapFD:    maps["tc_assignment"].FD(),
-			capacity: config.AssignmentCapacity,
+		flowStore: tcFlowStore{
+			assignment: tcAssignmentStore{
+				mapFD:    maps["tc_assignment"].FD(),
+				capacity: config.AssignmentCapacity,
+			},
 		},
 		selfMapExternal: config.EnableLocal && config.SelfBypassMap != nil,
 	}
@@ -996,8 +997,7 @@ func (b *TCBackend) Close() error {
 	b.icmpEchoReply = nil
 	b.runtime = nil
 	b.controlMapFD = -1
-	b.assignment = tcAssignmentStore{}
-	b.returns = tcReturnStore{}
+	b.flowStore.reset()
 	b.selfMapExternal = false
 	b.bypassIPv4 = nil
 	b.bypassIPv6 = nil
