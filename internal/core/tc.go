@@ -145,6 +145,22 @@ type tcRuntime struct {
 	programs []*CiliumEBPF.Program
 }
 
+// close releases the native TC object owned by this runtime. An externally
+// supplied self-bypass map is removed from the object set first so the caller
+// keeps ownership of that map while all generated resources are closed here.
+func (r *tcRuntime) close(externalSelfMap bool) error {
+	if r == nil {
+		return nil
+	}
+	if externalSelfMap {
+		delete(r.maps, "tc_self_sockets")
+	}
+	err := closeObjectResources(r.programs, r.maps)
+	r.programs = nil
+	r.maps = nil
+	return err
+}
+
 type TCBackend struct {
 	access           sync.RWMutex
 	health           backendHealth
@@ -989,10 +1005,7 @@ func (b *TCBackend) Close() error {
 	}
 	b.control.Enabled = 0
 	_ = b.updateControlLocked()
-	if b.selfMapExternal {
-		delete(b.runtime.maps, "tc_self_sockets")
-	}
-	closeErr := closeObjectResources(b.runtime.programs, b.runtime.maps)
+	closeErr := b.runtime.close(b.selfMapExternal)
 	closeErr = E.Errors(closeErr, b.icmpEchoReply.Close())
 	b.icmpEchoReply = nil
 	b.runtime = nil
