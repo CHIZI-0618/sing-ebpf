@@ -116,6 +116,14 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
     if (!record) return deliver_isolated(skb, control, ethernet);
 
     struct sb_tc_assign_value *previous = map_lookup(&tc_assignment, flow);
+    struct sb_tc_assignment_claim *existing_claim = map_lookup(&tc_assignment_claim, flow);
+    // A userspace retirement claim fences this incarnation while it is being
+    // rechecked and deleted. Do not refresh or republish it from the fast path;
+    // the caller will release the claim after the conditional delete.
+    if (existing_claim != 0 && existing_claim->state == SB_TC_ASSIGNMENT_CLAIM_RETIRE) {
+        increment_stat(SB_TC_STAT_ASSIGNMENT_UPDATE_FAILURE);
+        return TC_ACT_SHOT;
+    }
     struct sb_tc_assign_value assignment = {
         .socket_cookie = cookie, .last_seen_ns = now, .ifindex = value.ifindex,
         .path = path, .source_mac_valid = ethernet && path == SB_TC_PATH_SHARED,
@@ -127,13 +135,14 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
         source_mac_equal(previous->source_mac, assignment.source_mac)) {
         refresh_tc_activity(&previous->last_seen_ns, now);
 	} else {
-		struct sb_tc_assignment_claim claim = {
-			.socket_cookie = cookie, .generation = assignment.generation,
+        struct sb_tc_assignment_claim claim = {
+            .socket_cookie = cookie, .generation = assignment.generation,
+            .state = SB_TC_ASSIGNMENT_CLAIM_PUBLISH,
 		};
-		struct sb_tc_assignment_claim *existing_claim = map_lookup(&tc_assignment_claim, flow);
 		bool claim_owned = existing_claim != 0 &&
 			existing_claim->socket_cookie == claim.socket_cookie &&
-			existing_claim->generation == claim.generation;
+            existing_claim->generation == claim.generation &&
+            existing_claim->state == SB_TC_ASSIGNMENT_CLAIM_PUBLISH;
 		if (existing_claim == 0) {
 			if (map_update(&tc_assignment_claim, flow, &claim, BPF_NOEXIST) == 0) {
 				claim_owned = true;
@@ -141,7 +150,8 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
 				existing_claim = map_lookup(&tc_assignment_claim, flow);
 				claim_owned = existing_claim != 0 &&
 					existing_claim->socket_cookie == claim.socket_cookie &&
-					existing_claim->generation == claim.generation;
+					existing_claim->generation == claim.generation &&
+					existing_claim->state == SB_TC_ASSIGNMENT_CLAIM_PUBLISH;
 			}
 		}
 		if (!claim_owned) {

@@ -65,6 +65,9 @@
 #define SB_TC_SOCKET_POLICY_BYPASS 1U
 #define SB_TC_SOCKET_POLICY_INTERCEPT 2U
 
+#define SB_TC_ASSIGNMENT_CLAIM_PUBLISH 1U
+#define SB_TC_ASSIGNMENT_CLAIM_RETIRE 2U
+
 
 #define SB_TC_LISTENER_TCP4 0U
 #define SB_TC_LISTENER_TCP6 1U
@@ -153,7 +156,7 @@ struct sb_tc_assign_value {
 struct sb_tc_assignment_claim {
     __u64 socket_cookie;
     __u32 generation;
-    __u32 reserved;
+    __u32 state;
 };
 
 _Static_assert(sizeof(struct sb_tc_control) == 32, "sb_tc_control ABI size");
@@ -172,6 +175,8 @@ _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, last_seen_ns) == 8,
 _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, generation) == 28,
     "sb_tc_assign_value generation ABI offset");
 _Static_assert(sizeof(struct sb_tc_assignment_claim) == 16, "sb_tc_assignment_claim ABI size");
+_Static_assert(__builtin_offsetof(struct sb_tc_assignment_claim, state) == 12,
+    "sb_tc_assignment_claim state ABI offset");
 
 struct ethernet_header {
     __u8 destination[6];

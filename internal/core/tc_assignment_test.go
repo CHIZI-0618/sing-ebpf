@@ -311,7 +311,7 @@ func TestSweepAssignmentsPreservesPublishingClaim(t *testing.T) {
 	if err = updateMap(backend.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
 		t.Fatal(err)
 	}
-	claim := tcAssignmentClaim{SocketCookie: value.SocketCookie, Generation: value.Generation}
+	claim := tcAssignmentClaim{SocketCookie: value.SocketCookie, Generation: value.Generation, State: tcAssignmentClaimPublish}
 	if err = backend.runtime.maps["tc_assignment_claim"].Put(key, claim); err != nil {
 		t.Fatal(err)
 	}

@@ -151,8 +151,13 @@ type tcAssignKey struct {
 type tcAssignmentClaim struct {
 	SocketCookie uint64
 	Generation   uint32
-	Reserved     uint32
+	State        uint32
 }
+
+const (
+	tcAssignmentClaimPublish uint32 = 1
+	tcAssignmentClaimRetire  uint32 = 2
+)
 
 type TCAssignment struct {
 	SocketCookie   uint64
@@ -769,6 +774,32 @@ func (b *TCBackend) RemoveAssignmentIfMatch(
 	if !sameTCAssignment(current, expected) {
 		return false, nil
 	}
+	claimMap := b.runtime.maps["tc_assignment_claim"]
+	if claimMap == nil {
+		return false, E.New("TC assignment claim map is unavailable")
+	}
+	claim := tcAssignmentClaim{
+		SocketCookie: current.SocketCookie,
+		Generation:   current.Generation,
+		State:        tcAssignmentClaimRetire,
+	}
+	if err = claimMap.Update(&key, &claim, CiliumEBPF.UpdateNoExist); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer claimMap.Delete(&key)
+	var fenced TCAssignment
+	if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&fenced)); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !sameTCAssignment(fenced, expected) {
+		return false, nil
+	}
 	if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&key)); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return false, nil
@@ -805,7 +836,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 	defer b.assignmentSweepAccess.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
-	if b.runtime == nil || b.runtime.maps["tc_assignment"] == nil {
+	if b.runtime == nil || b.runtime.maps["tc_assignment"] == nil || b.runtime.maps["tc_assignment_claim"] == nil {
 		return TCAssignmentSweepResult{Failure: TCAssignmentSweepFailureClosed}, errBackendClosed
 	}
 	result := TCAssignmentSweepResult{Usage: MapUsage{Capacity: b.assignmentCapacity}, FailureMap: "sb_tc_assign"}
@@ -847,21 +878,49 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 			result.InFlight++
 			continue
 		}
-		if claimMap := b.runtime.maps["tc_assignment_claim"]; claimMap != nil {
-			var claim tcAssignmentClaim
-			claimErr := lookupMap(claimMap.FD(), unsafe.Pointer(&candidate.key), unsafe.Pointer(&claim))
-			if claimErr == nil {
-				result.InFlight++
-				continue
+		claimMap := b.runtime.maps["tc_assignment_claim"]
+		claimHeld := false
+		if claimMap != nil {
+			claim := tcAssignmentClaim{
+				SocketCookie: candidate.value.SocketCookie,
+				Generation:   candidate.value.Generation,
+				State:        tcAssignmentClaimRetire,
 			}
-			if !errors.Is(claimErr, unix.ENOENT) {
+			if claimErr := claimMap.Update(&candidate.key, &claim, CiliumEBPF.UpdateNoExist); claimErr != nil {
+				if errors.Is(claimErr, unix.EEXIST) {
+					result.InFlight++
+					continue
+				}
 				result.Failure = TCAssignmentSweepFailureLookup
 				return result, claimErr
 			}
+			claimHeld = true
+			var fenced TCAssignment
+			if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key), unsafe.Pointer(&fenced)); err != nil {
+				if errors.Is(err, unix.ENOENT) {
+					_ = claimMap.Delete(&candidate.key)
+					result.Missing++
+					continue
+				}
+				_ = claimMap.Delete(&candidate.key)
+				result.Failure = TCAssignmentSweepFailureLookup
+				return result, err
+			}
+			if !sameTCAssignment(fenced, candidate.value) || fenced.LastSeenNS > staleBefore {
+				_ = claimMap.Delete(&candidate.key)
+				result.InFlight++
+				continue
+			}
 		}
 		if err = deleteMap(b.assignmentMapFD, unsafe.Pointer(&candidate.key)); err != nil && !errors.Is(err, unix.ENOENT) {
+			if claimHeld {
+				_ = claimMap.Delete(&candidate.key)
+			}
 			result.Failure = TCAssignmentSweepFailureDelete
 			return result, err
+		}
+		if claimHeld {
+			_ = claimMap.Delete(&candidate.key)
 		}
 		result.Removed++
 		b.assignmentSweepRemoved++
