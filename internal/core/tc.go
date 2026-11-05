@@ -132,7 +132,8 @@ type tcControl struct {
 	DeliveryInterface uint32
 	RoutingMark       uint32
 	ListenerPort      uint16
-	ReservedPolicy    [2]uint16
+	ReservedPolicy    uint16
+	NetworkGeneration uint32
 	DeliveryMAC       MACAddress
 	Reserved          uint16
 }
@@ -160,13 +161,14 @@ const (
 )
 
 type TCAssignment struct {
-	SocketCookie   uint64
-	LastSeenNS     uint64
-	InterfaceIndex uint32
-	SourceMAC      MACAddress
-	Path           uint8
-	SourceMACValid uint8
-	Generation     uint32
+	SocketCookie      uint64
+	LastSeenNS        uint64
+	InterfaceIndex    uint32
+	SourceMAC         MACAddress
+	Path              uint8
+	SourceMACValid    uint8
+	Generation        uint32
+	NetworkGeneration uint32
 }
 
 // TCAssignmentSweepResult describes one bounded cleanup pass. Entries are
@@ -338,6 +340,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		DeliveryInterface: config.DeliveryInterface,
 		RoutingMark:       config.RoutingMark,
 		ListenerPort:      config.ListenerPort,
+		NetworkGeneration: 1,
 	}
 	if len(includeIPv4)+len(includeIPv6) > 0 {
 		controlValue.Flags |= 1 << 12
@@ -614,6 +617,27 @@ func (b *TCBackend) SetDeliveryInterface(interfaceIndex uint32, hardwareAddress 
 	return nil
 }
 
+// SetNetworkGeneration advances the network incarnation used by the TC
+// packet path. Existing assignments and return routes remain in their maps
+// for bounded asynchronous reclamation, but are no longer eligible for lookup.
+func (b *TCBackend) SetNetworkGeneration(generation uint32) error {
+	if generation == 0 {
+		return E.New("invalid TC eBPF network generation")
+	}
+	b.access.Lock()
+	defer b.access.Unlock()
+	if err := b.requireUsableLocked(); err != nil {
+		return err
+	}
+	previous := b.control.NetworkGeneration
+	b.control.NetworkGeneration = generation
+	if err := b.updateControlLocked(); err != nil {
+		b.control.NetworkGeneration = previous
+		return err
+	}
+	return nil
+}
+
 const (
 	tcListenerUnregistered = iota
 	tcListenerInSockmap
@@ -735,6 +759,9 @@ func (b *TCBackend) LookupAssignment(protocol uint8, source, destination netip.A
 	if err = lookupMap(b.assignmentMapFD, unsafe.Pointer(&key), unsafe.Pointer(&assignment)); err != nil {
 		return TCAssignment{}, err
 	}
+	if assignment.NetworkGeneration != b.control.NetworkGeneration {
+		return TCAssignment{}, unix.ENOENT
+	}
 	if remove {
 		_ = deleteMap(b.assignmentMapFD, unsafe.Pointer(&key))
 	}
@@ -847,7 +874,8 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 	scan, err := b.assignmentSweepScratch.scan(
 		b.runtime.maps["tc_assignment"], b.assignmentCapacity, fallbackBudget,
 		func(key tcAssignKey, value TCAssignment) {
-			if value.LastSeenNS != 0 && value.LastSeenNS <= staleBefore {
+			if value.NetworkGeneration != b.control.NetworkGeneration ||
+				(value.LastSeenNS != 0 && value.LastSeenNS <= staleBefore) {
 				b.assignmentSweepCandidates = append(b.assignmentSweepCandidates, tcAssignmentSweepEntry{key: key, value: value})
 			}
 		},
@@ -874,7 +902,7 @@ func (b *TCBackend) SweepAssignments(maxIdle time.Duration, fallbackBudget uint3
 			result.Superseded++
 			continue
 		}
-		if current.LastSeenNS > staleBefore {
+		if current.NetworkGeneration == b.control.NetworkGeneration && current.LastSeenNS > staleBefore {
 			result.InFlight++
 			continue
 		}

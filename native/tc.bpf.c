@@ -93,7 +93,8 @@ struct sb_tc_control {
     __u32 delivery_ifindex;
     __u32 routing_mark;
     __u16 listener_port;
-    __u16 reserved_policy[2];
+    __u16 reserved_policy;
+    __u32 network_generation;
     __u8 delivery_mac[6];
     __u16 reserved;
 };
@@ -151,6 +152,7 @@ struct sb_tc_assign_value {
     __u8 path;
     __u8 source_mac_valid;
     __u32 generation;
+    __u32 network_generation;
 };
 
 struct sb_tc_assignment_claim {
@@ -167,14 +169,18 @@ _Static_assert(__builtin_offsetof(struct sb_tc_control, routing_mark) == 12,
     "sb_tc_control routing_mark ABI offset");
 _Static_assert(__builtin_offsetof(struct sb_tc_control, listener_port) == 16,
     "sb_tc_control listener_port ABI offset");
+_Static_assert(__builtin_offsetof(struct sb_tc_control, network_generation) == 20,
+    "sb_tc_control network generation ABI offset");
 _Static_assert(sizeof(struct sb_tc_assign_key) == 44, "sb_tc_assign_key ABI size");
-_Static_assert(sizeof(struct sb_tc_assign_value) == 32, "sb_tc_assign_value ABI size");
+_Static_assert(sizeof(struct sb_tc_assign_value) == 40, "sb_tc_assign_value ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, socket_cookie) == 0,
     "sb_tc_assign_value socket_cookie ABI offset");
 _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, last_seen_ns) == 8,
     "sb_tc_assign_value last_seen_ns ABI offset");
 _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, generation) == 28,
     "sb_tc_assign_value generation ABI offset");
+_Static_assert(__builtin_offsetof(struct sb_tc_assign_value, network_generation) == 32,
+    "sb_tc_assign_value network generation ABI offset");
 _Static_assert(sizeof(struct sb_tc_assignment_claim) == 16, "sb_tc_assignment_claim ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_assignment_claim, state) == 12,
     "sb_tc_assignment_claim state ABI offset");

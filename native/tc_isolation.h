@@ -8,6 +8,8 @@
 // Requests the assignment record; never part of the stored return owner.
 #define SB_TC_REDIRECT_RECORD 0x200U
 #define SB_TC_ACTIVITY_REFRESH_NS 1000000000ULL
+#define SB_TC_RETURN_RETIRING 0x80000000U
+#define SB_TC_RETURN_NETWORK_MASK 0x7fffffffU
 
 // Activity is an idle-cleanup hint, not packet accounting. Coalesce writes
 // while preserving immediate publication of identity/generation changes.
@@ -23,9 +25,8 @@ struct sb_tc_return_value {
     __u32 flags;
     __u8 source_mac[6];
     __u8 destination_mac[6];
-    __u32 reserved;
+    __u32 network_generation;
 };
-#define SB_TC_RETURN_RETIRING 1U
 _Static_assert(sizeof(struct sb_tc_return_value) == 40, "sb_tc_return_value ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_return_value, ifindex) == 16,
     "sb_tc_return_value ifindex ABI offset");
@@ -51,6 +52,8 @@ INLINE void reverse_flow(struct sb_tc_assign_key *reverse, const struct sb_tc_as
 INLINE bool same_return_owner(const struct sb_tc_return_value *left,
     const struct sb_tc_return_value *right) {
     return left->ifindex == right->ifindex && left->flags == right->flags &&
+        (left->network_generation & SB_TC_RETURN_NETWORK_MASK) ==
+            (right->network_generation & SB_TC_RETURN_NETWORK_MASK) &&
         source_mac_equal(left->source_mac, right->source_mac) &&
         source_mac_equal(left->destination_mac, right->destination_mac);
 }
@@ -86,6 +89,7 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
     __u64 now = ktime_get_ns();
     struct sb_tc_return_value value = {
         .last_seen_ns = now, .generation = now, .ifindex = skb->ifindex, .flags = flags,
+        .network_generation = control->network_generation & SB_TC_RETURN_NETWORK_MASK,
     };
     if (ethernet) {
         void *data = (void *)(long)skb->data;
@@ -98,7 +102,7 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
     struct sb_tc_assign_key reverse;
     reverse_flow(&reverse, flow);
     struct sb_tc_return_value *existing = map_lookup(&tc_return, &reverse);
-    if (existing != 0 && (existing->reserved & SB_TC_RETURN_RETIRING) != 0U) {
+    if (existing != 0 && (existing->network_generation & SB_TC_RETURN_RETIRING) != 0U) {
         increment_stat(SB_TC_STAT_RETURN_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
@@ -133,10 +137,12 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
         .socket_cookie = cookie, .last_seen_ns = now, .ifindex = value.ifindex,
         .path = path, .source_mac_valid = ethernet && path == SB_TC_PATH_SHARED,
         .generation = next_assignment_generation(previous),
+        .network_generation = control->network_generation,
     };
     __builtin_memcpy(assignment.source_mac, value.destination_mac, 6U);
     if (previous != 0 && previous->socket_cookie == cookie && previous->ifindex == value.ifindex &&
         previous->path == path && previous->source_mac_valid == assignment.source_mac_valid &&
+        previous->network_generation == assignment.network_generation &&
         source_mac_equal(previous->source_mac, assignment.source_mac)) {
         refresh_tc_activity(&previous->last_seen_ns, now);
 	} else {
@@ -252,6 +258,11 @@ int sing_ebpf_tc_isolated_return(struct __sk_buff *skb) {
         entry = map_lookup(&tc_return, &flow);
     }
     if (entry == 0) {
+        increment_stat(SB_TC_STAT_RETURN_LOOKUP_FAILURE);
+        return TC_ACT_SHOT;
+    }
+    if ((entry->network_generation & SB_TC_RETURN_NETWORK_MASK) !=
+        (control->network_generation & SB_TC_RETURN_NETWORK_MASK)) {
         increment_stat(SB_TC_STAT_RETURN_LOOKUP_FAILURE);
         return TC_ACT_SHOT;
     }

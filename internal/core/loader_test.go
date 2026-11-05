@@ -354,7 +354,7 @@ func TestEmbeddedTCObjectLayout(t *testing.T) {
 		"tc_shared_force4":       {8, 1},
 		"tc_shared_force6":       {20, 1},
 		"tc_listener_sockets":    {4, 4},
-		"tc_assignment":          {44, 32},
+		"tc_assignment":          {44, 40},
 		"tc_assignment_claim":    {44, 16},
 		"tc_return":              {44, 40},
 		"tc_return_frag":         {44, 40},

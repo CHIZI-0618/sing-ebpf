@@ -340,6 +340,10 @@ func (b *TCBackend) SetDeliveryInterface(interfaceIndex uint32, hardwareAddress 
 	return core.UnwrapTCBackend(b).SetDeliveryInterface(interfaceIndex, hardwareAddress)
 }
 
+func (b *TCBackend) SetNetworkGeneration(generation uint32) error {
+	return core.UnwrapTCBackend(b).SetNetworkGeneration(generation)
+}
+
 func (b *TCBackend) SetRoutingMark(mark uint32) error {
 	return core.UnwrapTCBackend(b).SetRoutingMark(mark)
 }
