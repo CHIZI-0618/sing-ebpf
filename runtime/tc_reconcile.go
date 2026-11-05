@@ -28,7 +28,7 @@ func (d *tcDataPlane) reconcile(localInterface string, sharedInterfaces []string
 	if err := d.closeRetired(); err != nil {
 		return err
 	}
-	desired, err := d.desiredAttachmentState(localInterface, sharedInterfaces)
+	plan, err := d.prepareTCReconcilePlan(localInterface, sharedInterfaces, hostAddresses)
 	if err != nil {
 		return err
 	}
@@ -45,33 +45,13 @@ func (d *tcDataPlane) reconcile(localInterface string, sharedInterfaces []string
 		}
 		d.replyMTU = mtu
 	}
-	current := make(map[string]*tcInterfaceAttachment, len(d.attachments))
-	for _, attachment := range d.attachments {
-		current[attachment.interfaceName] = attachment
-	}
-	// Reconcile the selected local interface first. During an uplink handover
-	// this adds the replacement local role before the previous interface loses
-	// it, including when the replacement was already attached for shared
-	// traffic.
-	names := make([]string, 0, len(desired))
-	sortStart := 0
-	if _, loaded := desired[localInterface]; localInterface != "" && loaded {
-		names = append(names, localInterface)
-		sortStart = 1
-	}
-	for interfaceName := range desired {
-		if interfaceName != localInterface {
-			names = append(names, interfaceName)
-		}
-	}
-	slices.Sort(names[sortStart:])
+	desired := plan.desired
+	current := plan.current
+	names := plan.names
 	attachments := make([]*tcInterfaceAttachment, 0, len(desired))
 	created := make([]*tcInterfaceAttachment, 0)
-	previousRoles := make(map[string]tcInterfaceRole, len(d.attachments))
-	for _, attachment := range d.attachments {
-		previousRoles[attachment.interfaceName] = attachment.role
-	}
-	hostChanged := !slices.Equal(d.hostAddresses, hostAddresses)
+	previousRoles := plan.previousRoles
+	hostChanged := plan.hostChanged
 	if hostChanged {
 		if err = d.backend.UpdateHostAddresses(hostAddresses); err != nil {
 			return err
@@ -194,6 +174,57 @@ func (d *tcDataPlane) reconcile(localInterface string, sharedInterfaces []string
 	d.sharedInterfaces = slices.Clone(sharedInterfaces)
 	d.hostAddresses = slices.Clone(hostAddresses)
 	return closeErr
+}
+
+// tcReconcilePlan contains only the userspace state needed by the attachment
+// transaction. Building it before touching host policy keeps target selection,
+// ordering, and rollback snapshots separate from kernel mutations.
+type tcReconcilePlan struct {
+	desired       map[string]tcAttachmentState
+	current       map[string]*tcInterfaceAttachment
+	names         []string
+	previousRoles map[string]tcInterfaceRole
+	hostChanged   bool
+}
+
+func (d *tcDataPlane) prepareTCReconcilePlan(localInterface string, sharedInterfaces []string, hostAddresses []netip.Addr) (tcReconcilePlan, error) {
+	desired, err := d.desiredAttachmentState(localInterface, sharedInterfaces)
+	if err != nil {
+		return tcReconcilePlan{}, err
+	}
+	current := make(map[string]*tcInterfaceAttachment, len(d.attachments))
+	previousRoles := make(map[string]tcInterfaceRole, len(d.attachments))
+	for _, attachment := range d.attachments {
+		current[attachment.interfaceName] = attachment
+		previousRoles[attachment.interfaceName] = attachment.role
+	}
+	return tcReconcilePlan{
+		desired:       desired,
+		current:       current,
+		names:         orderedTCAttachmentNames(localInterface, desired),
+		previousRoles: previousRoles,
+		hostChanged:   !slices.Equal(d.hostAddresses, hostAddresses),
+	}, nil
+}
+
+// orderedTCAttachmentNames gives the active local path first during a handover
+// and makes the remaining attachment order deterministic. Local-first is a
+// lifecycle invariant: it lets a replacement uplink become live before the
+// previous local attachment is retired.
+func orderedTCAttachmentNames(localInterface string, desired map[string]tcAttachmentState) []string {
+	names := make([]string, 0, len(desired))
+	sortStart := 0
+	if _, loaded := desired[localInterface]; localInterface != "" && loaded {
+		names = append(names, localInterface)
+		sortStart = 1
+	}
+	for interfaceName := range desired {
+		if interfaceName != localInterface {
+			names = append(names, interfaceName)
+		}
+	}
+	slices.Sort(names[sortStart:])
+	return names
 }
 
 func (d *tcDataPlane) desiredAttachmentState(localInterface string, sharedInterfaces []string) (map[string]tcAttachmentState, error) {
