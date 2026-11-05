@@ -25,8 +25,18 @@ jobs:
           go-version: 1.25.5
       - name: Install guest and kernel build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-guest-agent ovmf build-essential flex bison libssl-dev libelf-dev bc iptables iproute2
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if timeout 5m sudo apt-get -o Acquire::Retries=3 update; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "apt metadata update failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          timeout 10m sudo apt-get install -y qemu-system-x86 qemu-guest-agent ovmf build-essential flex bison libssl-dev libelf-dev bc iptables iproute2
       - name: Cache test kernel
         id: kernel-cache
         uses: actions/cache/restore@v4
