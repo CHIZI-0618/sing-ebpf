@@ -197,7 +197,7 @@ func TestCgroupUDPRecoverySweepAccountsAcrossPartialPasses(t *testing.T) {
 		runtime:          &cgroupRuntime{maps: map[string]*CiliumEBPF.Map{"cgroup_udp_recovery": m}},
 		udpRecoveryMapFD: m.FD(), mapCapacity: CgroupMapCapacity{UDPRedirect: 64},
 	}
-	backend.recoverySweepScratch.lookupSupport.mode.Store(mapBatchUnsupported)
+	backend.recovery.scratch.lookupSupport.mode.Store(mapBatchUnsupported)
 	for port := uint16(41000); port < 41003; port++ {
 		key, err := makeListenerLookupKey(ProtocolUDP, netip.AddrPortFrom(netip.MustParseAddr("127.128.0.1"), port))
 		if err != nil {

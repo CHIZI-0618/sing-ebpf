@@ -68,8 +68,8 @@ func (b *CgroupBackend) RecoverUDPOriginal(listenerDestination netip.AddrPort) (
 	if err != nil {
 		return OriginalDestination{}, err
 	}
-	b.udpRecoveryAccess.Lock()
-	defer b.udpRecoveryAccess.Unlock()
+	b.recovery.access.Lock()
+	defer b.recovery.access.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil {
@@ -132,8 +132,8 @@ func (b *CgroupBackend) DeleteUDPRecovery(
 	if err != nil {
 		return false, err
 	}
-	b.udpRecoveryAccess.Lock()
-	defer b.udpRecoveryAccess.Unlock()
+	b.recovery.access.Lock()
+	defer b.recovery.access.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil {
@@ -219,8 +219,8 @@ func (b *CgroupBackend) RecoverConnectedUDPOriginal(listenerDestination netip.Ad
 	if err != nil {
 		return OriginalDestination{}, err
 	}
-	b.udpRecoveryAccess.Lock()
-	defer b.udpRecoveryAccess.Unlock()
+	b.recovery.access.Lock()
+	defer b.recovery.access.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil {
@@ -471,8 +471,8 @@ func (b *CgroupBackend) SweepUDPRecovery(maxIdle time.Duration, fallbackBudget u
 	if maxIdle <= 0 || fallbackBudget == 0 {
 		return UDPRecoverySweepResult{}, unix.EINVAL
 	}
-	b.udpRecoveryAccess.Lock()
-	defer b.udpRecoveryAccess.Unlock()
+	b.recovery.access.Lock()
+	defer b.recovery.access.Unlock()
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.runtime == nil || b.runtime.maps["cgroup_udp_recovery"] == nil {
@@ -484,26 +484,26 @@ func (b *CgroupBackend) SweepUDPRecovery(maxIdle time.Duration, fallbackBudget u
 		return UDPRecoverySweepResult{Usage: MapUsage{Capacity: b.recoveryCapacity()}, Complete: true}, nil
 	}
 	staleBefore := now - maxIdleNS
-	b.recoverySweepCandidates = b.recoverySweepCandidates[:0]
-	scan, err := b.recoverySweepScratch.scan(
+	b.recovery.candidates = b.recovery.candidates[:0]
+	scan, err := b.recovery.scratch.scan(
 		b.runtime.maps["cgroup_udp_recovery"],
 		b.recoveryCapacity(),
 		fallbackBudget,
 		func(key listenerLookupKey, value originalDestinationValue) {
 			if value.CreatedAtNS != 0 && value.CreatedAtNS <= staleBefore {
-				b.recoverySweepCandidates = append(b.recoverySweepCandidates, udpRecoveryEntry{key: key, value: value})
+				b.recovery.candidates = append(b.recovery.candidates, udpRecoveryEntry{key: key, value: value})
 			}
 		},
 	)
 	if scan.Restarted {
-		b.recoverySweepRemoved = 0
+		b.recovery.removed = 0
 	}
 	if err != nil {
 		return UDPRecoverySweepResult{}, err
 	}
 	result := UDPRecoverySweepResult{Scanned: scan.Scanned, Complete: scan.Complete,
 		Usage: MapUsage{Capacity: b.recoveryCapacity()}}
-	for _, entry := range b.recoverySweepCandidates {
+	for _, entry := range b.recovery.candidates {
 		var current originalDestinationValue
 		if err = lookupMap(b.udpRecoveryMapFD, unsafe.Pointer(&entry.key), unsafe.Pointer(&current)); err != nil {
 			if errors.Is(err, unix.ENOENT) {
@@ -518,11 +518,11 @@ func (b *CgroupBackend) SweepUDPRecovery(maxIdle time.Duration, fallbackBudget u
 			return result, err
 		}
 		result.Removed++
-		b.recoverySweepRemoved++
+		b.recovery.removed++
 	}
 	if result.Complete {
-		result.Usage.Entries = scan.Entries - min(scan.Entries, b.recoverySweepRemoved)
-		b.recoverySweepRemoved = 0
+		result.Usage.Entries = scan.Entries - min(scan.Entries, b.recovery.removed)
+		b.recovery.removed = 0
 	}
 	return result, nil
 }
