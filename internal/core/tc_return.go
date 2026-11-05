@@ -23,7 +23,10 @@ type tcReturnValue struct {
 	NetworkGeneration uint32
 }
 
-const tcReturnRetiring uint32 = 1
+// The high bit is reserved by native/tc_isolation.h for userspace retirement
+// fencing. The lower 31 bits carry the network generation, which legitimately
+// starts at 1 on every backend.
+const tcReturnRetiring uint32 = ^networkGenerationMask
 
 type tcReturnReference struct {
 	key        tcAssignKey
@@ -86,7 +89,7 @@ func (b *TCBackend) AcquireReturnRoute(protocol uint8, source, destination netip
 	if value.Generation == 0 {
 		return TCReturnHandle{}, E.New("invalid TC return generation")
 	}
-	if value.NetworkGeneration&0x7fffffff != b.control.NetworkGeneration {
+	if value.NetworkGeneration&networkGenerationMask != b.control.NetworkGeneration {
 		return TCReturnHandle{}, unix.ENOENT
 	}
 	if value.NetworkGeneration&tcReturnRetiring != 0 {
@@ -129,7 +132,7 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	if value.Generation != ref.generation {
 		return TCReturnHandle{}, E.New("TC return route generation changed")
 	}
-	if value.NetworkGeneration&0x7fffffff != b.control.NetworkGeneration {
+	if value.NetworkGeneration&networkGenerationMask != b.control.NetworkGeneration {
 		return TCReturnHandle{}, unix.ENOENT
 	}
 	if value.NetworkGeneration&tcReturnRetiring != 0 {

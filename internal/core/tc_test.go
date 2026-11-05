@@ -62,6 +62,17 @@ func TestTCABI(t *testing.T) {
 	}
 }
 
+func TestTCReturnRetirementUsesReservedGenerationBit(t *testing.T) {
+	if tcReturnRetiring != ^networkGenerationMask {
+		t.Fatalf("retirement bit = %#x, want %#x", tcReturnRetiring, ^networkGenerationMask)
+	}
+	for _, generation := range []uint32{1, 2, 0x7fffffff} {
+		if generation&tcReturnRetiring != 0 {
+			t.Fatalf("valid generation %#x is classified as retiring", generation)
+		}
+	}
+}
+
 func TestSameTCAssignmentIgnoresOnlyActivity(t *testing.T) {
 	base := TCAssignment{
 		SocketCookie: 1, LastSeenNS: 10, InterfaceIndex: 2,
