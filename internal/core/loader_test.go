@@ -357,7 +357,6 @@ func TestEmbeddedTCObjectLayout(t *testing.T) {
 		"tc_assignment":          {44, 32},
 		"tc_assignment_claim":    {44, 16},
 		"tc_return":              {44, 40},
-		"tc_return_claim":        {44, 16},
 		"tc_return_frag":         {44, 40},
 		"tc_stats":               {4, 8},
 		"tc_self_sockets":        {8, 4},

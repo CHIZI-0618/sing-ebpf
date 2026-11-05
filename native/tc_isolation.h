@@ -25,10 +25,7 @@ struct sb_tc_return_value {
     __u8 destination_mac[6];
     __u32 reserved;
 };
-// A userspace retirement claim fences the route while it is rechecked and
-// deleted. It is separate from assignment claims because return and forward
-// keys use opposite tuple directions and may coexist independently.
-MAP(tc_return_claim, struct sb_tc_assign_key, struct sb_tc_return_claim, BPF_MAP_TYPE_HASH, 65536U);
+#define SB_TC_RETURN_RETIRING 1U
 _Static_assert(sizeof(struct sb_tc_return_value) == 40, "sb_tc_return_value ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_return_value, ifindex) == 16,
     "sb_tc_return_value ifindex ABI offset");
@@ -100,12 +97,11 @@ NOINLINE int redirect_isolated(struct __sk_buff *skb, const struct sb_tc_control
     }
     struct sb_tc_assign_key reverse;
     reverse_flow(&reverse, flow);
-    struct sb_tc_return_claim *return_claim = map_lookup(&tc_return_claim, &reverse);
-    if (return_claim != 0 && return_claim->state == SB_TC_ASSIGNMENT_CLAIM_RETIRE) {
+    struct sb_tc_return_value *existing = map_lookup(&tc_return, &reverse);
+    if (existing != 0 && (existing->reserved & SB_TC_RETURN_RETIRING) != 0U) {
         increment_stat(SB_TC_STAT_RETURN_UPDATE_FAILURE);
         return TC_ACT_SHOT;
     }
-    struct sb_tc_return_value *existing = map_lookup(&tc_return, &reverse);
     if (existing == 0) {
         // Another CPU may publish this flow concurrently. Never overwrite a
         // different publisher (e.g. overlapping addresses on two LANs).

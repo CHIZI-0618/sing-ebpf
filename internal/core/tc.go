@@ -292,7 +292,6 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		"tc_listener_sockets":    {name: "sb_tc_listen", mapType: CiliumEBPF.SockMap, maxEntries: 2},
 		"tc_assignment":          {name: "sb_tc_assign", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity, flags: bpfFlagNoPrealloc},
 		"tc_assignment_claim":    {name: "sb_tc_claim", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity, flags: bpfFlagNoPrealloc},
-		"tc_return_claim":        {name: "sb_tc_rclaim", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity, flags: bpfFlagNoPrealloc},
 		"tc_stats":               {name: "sb_tc_stats", mapType: CiliumEBPF.PerCPUArray, maxEntries: tcStatCount},
 		"tc_uid_policy":          {name: "sb_tc_uid", mapType: CiliumEBPF.LPMTrie, maxEntries: max(uint32(len(uidEntries)), 1), flags: bpfFlagNoPrealloc},
 		"tc_local_bypass_ipv4":   {name: "sb_tc_lbypass4", mapType: CiliumEBPF.LPMTrie, maxEntries: maxDestinationCIDRPolicyEntries, flags: bpfFlagNoPrealloc},

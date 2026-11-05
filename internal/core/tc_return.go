@@ -22,11 +22,7 @@ type tcReturnValue struct {
 	Reserved       uint32
 }
 
-type tcReturnClaim struct {
-	Generation uint64
-	State      uint32
-	Reserved   uint32
-}
+const tcReturnRetiring uint32 = 1
 
 type tcReturnReference struct {
 	key        tcAssignKey
@@ -72,20 +68,15 @@ func (b *TCBackend) AcquireReturnRoute(protocol uint8, source, destination netip
 	}
 	b.returnAccess.Lock()
 	defer b.returnAccess.Unlock()
-	if claimMap := b.runtime.maps["tc_return_claim"]; claimMap != nil {
-		var claim tcReturnClaim
-		if err = claimMap.Lookup(&key, &claim); err == nil {
-			return TCReturnHandle{}, E.New("TC return route is retiring")
-		} else if !errors.Is(err, unix.ENOENT) {
-			return TCReturnHandle{}, err
-		}
-	}
 	var value tcReturnValue
 	if err = b.runtime.maps["tc_return"].Lookup(&key, &value); err != nil {
 		return TCReturnHandle{}, err
 	}
 	if value.Generation == 0 {
 		return TCReturnHandle{}, E.New("invalid TC return generation")
+	}
+	if value.Reserved&tcReturnRetiring != 0 {
+		return TCReturnHandle{}, E.New("TC return route is retiring")
 	}
 	return b.retainReturnRouteLocked(key, value), nil
 }
@@ -108,16 +99,6 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	if original.owner != b || ref.key.Protocol != ProtocolUDP || b.returnReferences[ref] == 0 {
 		return TCReturnHandle{}, E.New("TC return route is not retained")
 	}
-	claimMap := b.runtime.maps["tc_return_claim"]
-	if claimMap == nil {
-		return TCReturnHandle{}, errBackendClosed
-	}
-	var claim tcReturnClaim
-	if err := claimMap.Lookup(&ref.key, &claim); err == nil {
-		return TCReturnHandle{}, E.New("TC return route is retiring")
-	} else if !errors.Is(err, unix.ENOENT) {
-		return TCReturnHandle{}, err
-	}
 	client := netip.AddrFrom16(ref.key.DestinationAddress)
 	if ref.key.Family == unix.AF_INET {
 		client = netip.AddrFrom4([4]byte(ref.key.DestinationAddress[:4]))
@@ -137,11 +118,6 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	value.LastSeenNS = monotonicNowNS()
 	value.Generation = value.LastSeenNS
 	if err = returnMap.Update(&key, &value, CiliumEBPF.UpdateNoExist); err != nil && !errors.Is(err, unix.EEXIST) {
-		return TCReturnHandle{}, err
-	}
-	if err = claimMap.Lookup(&key, &claim); err == nil {
-		return TCReturnHandle{}, E.New("TC reply route is retiring")
-	} else if !errors.Is(err, unix.ENOENT) {
 		return TCReturnHandle{}, err
 	}
 	var current tcReturnValue
@@ -179,11 +155,6 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 		result.Failure = TCAssignmentSweepFailureClosed
 		return errBackendClosed
 	}
-	claimMap := b.runtime.maps["tc_return_claim"]
-	if claimMap == nil {
-		result.Failure = TCAssignmentSweepFailureClosed
-		return errBackendClosed
-	}
 	now := monotonicNowNS()
 	staleBefore := now - min(now, uint64(maxIdle))
 	type candidate struct {
@@ -208,7 +179,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	for _, entry := range candidates {
 		// Acquisition is serialized only with this candidate's recheck/delete,
 		// not with the entire map traversal.
-		removed, failure, deleteErr := b.deleteIdleReturnRoute(returnMap, claimMap, entry.key, entry.value)
+		removed, failure, deleteErr := b.deleteIdleReturnRoute(returnMap, entry.key, entry.value)
 		if deleteErr != nil {
 			result.Failure = failure
 			return deleteErr
@@ -258,7 +229,7 @@ func (b *TCBackend) sweepReturnRoutesLocked(maxIdle time.Duration, budget uint32
 	return nil
 }
 
-func (b *TCBackend) deleteIdleReturnRoute(returnMap, claimMap *CiliumEBPF.Map, key tcAssignKey, expected tcReturnValue) (bool, string, error) {
+func (b *TCBackend) deleteIdleReturnRoute(returnMap *CiliumEBPF.Map, key tcAssignKey, expected tcReturnValue) (bool, string, error) {
 	b.returnAccess.Lock()
 	defer b.returnAccess.Unlock()
 	if b.returnReferences[tcReturnReference{key, expected.Generation}] != 0 {
@@ -273,14 +244,10 @@ func (b *TCBackend) deleteIdleReturnRoute(returnMap, claimMap *CiliumEBPF.Map, k
 	if current != expected {
 		return false, "", nil
 	}
-	claim := tcReturnClaim{Generation: current.Generation, State: tcAssignmentClaimRetire}
-	if err := claimMap.Update(&key, &claim, CiliumEBPF.UpdateNoExist); err != nil {
-		if errors.Is(err, unix.EEXIST) {
-			return false, "", nil
-		}
+	current.Reserved |= tcReturnRetiring
+	if err := returnMap.Update(&key, &current, CiliumEBPF.UpdateAny); err != nil {
 		return false, TCAssignmentSweepFailureLookup, err
 	}
-	defer claimMap.Delete(&key)
 	var fenced tcReturnValue
 	if err := returnMap.Lookup(&key, &fenced); err != nil {
 		if errors.Is(err, unix.ENOENT) {
@@ -288,7 +255,7 @@ func (b *TCBackend) deleteIdleReturnRoute(returnMap, claimMap *CiliumEBPF.Map, k
 		}
 		return false, TCAssignmentSweepFailureLookup, err
 	}
-	if fenced != expected {
+	if !sameTCReturnRoute(fenced, expected) || fenced.Reserved&tcReturnRetiring == 0 {
 		return false, "", nil
 	}
 	if err := returnMap.Delete(&key); errors.Is(err, unix.ENOENT) {
@@ -297,4 +264,10 @@ func (b *TCBackend) deleteIdleReturnRoute(returnMap, claimMap *CiliumEBPF.Map, k
 		return false, TCAssignmentSweepFailureDelete, err
 	}
 	return true, "", nil
+}
+
+func sameTCReturnRoute(left, right tcReturnValue) bool {
+	left.LastSeenNS, right.LastSeenNS = 0, 0
+	left.Reserved, right.Reserved = 0, 0
+	return left == right
 }
