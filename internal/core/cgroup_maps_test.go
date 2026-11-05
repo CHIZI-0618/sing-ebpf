@@ -31,6 +31,25 @@ func TestCgroupNetworkGenerationABI(t *testing.T) {
 	}
 }
 
+func TestNetworkGenerationWrapAndNormalization(t *testing.T) {
+	for _, testCase := range []struct {
+		input, want uint32
+	}{
+		{0, 1},
+		{1, 1},
+		{0x7ffffffe, 0x7ffffffe},
+		{0x7fffffff, 0x7fffffff},
+		{0xffffffff, 0x7fffffff},
+	} {
+		if got := normalizeNetworkGeneration(testCase.input); got != testCase.want {
+			t.Fatalf("normalizeNetworkGeneration(%#x)=%#x, want %#x", testCase.input, got, testCase.want)
+		}
+	}
+	if got := nextNetworkGeneration(0x7fffffff); got != 1 {
+		t.Fatalf("nextNetworkGeneration(max)=%d, want 1", got)
+	}
+}
+
 func TestCgroupUDPMapConfigurationKeepsFlowCacheWithoutSocketRelease(t *testing.T) {
 	capacity := DefaultCgroupMapCapacity()
 	for _, socketReleaseSupported := range []bool{false, true} {

@@ -29,7 +29,7 @@ func (b *CgroupBackend) ResetNetworkState() error {
 		return err
 	}
 	previousGeneration := b.networkGeneration
-	b.networkGeneration++
+	b.networkGeneration = nextNetworkGeneration(b.networkGeneration)
 	if err := b.updateCgroupControl(b.listenerPort); err != nil {
 		b.networkGeneration = previousGeneration
 		return E.Cause(err, "advance cgroup eBPF network generation")

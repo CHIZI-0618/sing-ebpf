@@ -629,9 +629,7 @@ func (b *TCBackend) SetDeliveryInterface(interfaceIndex uint32, hardwareAddress 
 // packet path. Existing assignments and return routes remain in their maps
 // for bounded asynchronous reclamation, but are no longer eligible for lookup.
 func (b *TCBackend) SetNetworkGeneration(generation uint32) error {
-	if generation == 0 {
-		return E.New("invalid TC eBPF network generation")
-	}
+	generation = normalizeNetworkGeneration(generation)
 	b.access.Lock()
 	defer b.access.Unlock()
 	if err := b.requireUsableLocked(); err != nil {
