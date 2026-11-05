@@ -15,5 +15,10 @@ type cgroupRecoveryStore struct {
 }
 
 func (s *cgroupRecoveryStore) reset() {
-	*s = cgroupRecoveryStore{}
+	// Keep access intact: callers reset the store while holding this mutex
+	// during backend shutdown. Zeroing the whole struct would replace the
+	// locked mutex and make the deferred Unlock panic.
+	s.scratch = mapScanScratch[listenerLookupKey, originalDestinationValue]{}
+	s.candidates = nil
+	s.removed = 0
 }
