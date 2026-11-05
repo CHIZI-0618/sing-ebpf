@@ -115,6 +115,9 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	if value.Generation != ref.generation {
 		return TCReturnHandle{}, E.New("TC return route generation changed")
 	}
+	if value.Reserved&tcReturnRetiring != 0 {
+		return TCReturnHandle{}, E.New("TC return route is retiring")
+	}
 	value.LastSeenNS = monotonicNowNS()
 	value.Generation = value.LastSeenNS
 	if err = returnMap.Update(&key, &value, CiliumEBPF.UpdateNoExist); err != nil && !errors.Is(err, unix.EEXIST) {
@@ -123,6 +126,9 @@ func (b *TCBackend) AcquireReplyRoute(original TCReturnHandle, source netip.Addr
 	var current tcReturnValue
 	if err = returnMap.Lookup(&key, &current); err != nil {
 		return TCReturnHandle{}, err
+	}
+	if current.Reserved&tcReturnRetiring != 0 {
+		return TCReturnHandle{}, E.New("TC reply route is retiring")
 	}
 	if current.InterfaceIndex != value.InterfaceIndex || current.Flags != value.Flags || current.SourceMAC != value.SourceMAC || current.DestinationMAC != value.DestinationMAC {
 		return TCReturnHandle{}, E.New("TC reply route belongs to another publisher")
