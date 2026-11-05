@@ -107,6 +107,9 @@ type TCConfig struct {
 	SelfBypassMap      *CiliumEBPF.Map
 	TrackProcess       bool
 	AssignmentCapacity uint32
+	// NetworkGeneration identifies the current network incarnation. Zero uses
+	// the initial generation for callers that do not track handovers.
+	NetworkGeneration uint32
 	// ICMPEchoReply loads the independent icmp_echo_reply object (see
 	// tc_icmp_echo_reply.go) and attaches it wherever this TC data plane already
 	// attaches local or shared filters. Left false, prepareTC never touches
@@ -335,12 +338,16 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 	if err != nil {
 		return nil, explainBPFPermissionError(err, memlockErr)
 	}
+	networkGeneration := config.NetworkGeneration
+	if networkGeneration == 0 {
+		networkGeneration = 1
+	}
 	controlValue := tcControl{
 		Flags:             tcFlags(config, policy),
 		DeliveryInterface: config.DeliveryInterface,
 		RoutingMark:       config.RoutingMark,
 		ListenerPort:      config.ListenerPort,
-		NetworkGeneration: 1,
+		NetworkGeneration: networkGeneration,
 	}
 	if len(includeIPv4)+len(includeIPv6) > 0 {
 		controlValue.Flags |= 1 << 12

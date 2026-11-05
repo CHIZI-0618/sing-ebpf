@@ -268,6 +268,7 @@ type TCConfig struct {
 	TrackProcess       bool
 	ICMPEchoReply      bool
 	AssignmentCapacity uint32
+	NetworkGeneration  uint32
 }
 
 type TCBackend struct {
@@ -290,6 +291,7 @@ func PrepareTC(config TCConfig) (*TCBackend, error) {
 		TrackProcess:       config.TrackProcess,
 		ICMPEchoReply:      config.ICMPEchoReply,
 		AssignmentCapacity: config.AssignmentCapacity,
+		NetworkGeneration:  config.NetworkGeneration,
 	}, config.SelfBypass)
 	if err != nil {
 		return nil, err
