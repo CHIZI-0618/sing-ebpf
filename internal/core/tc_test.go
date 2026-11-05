@@ -57,6 +57,9 @@ func TestTCABI(t *testing.T) {
 	if offset := unsafe.Offsetof(TCAssignment{}.NetworkGeneration); offset != 32 {
 		t.Fatalf("unexpected TC assignment network generation offset: %d", offset)
 	}
+	if offset := unsafe.Offsetof(TCAssignment{}.Reserved); offset != 36 {
+		t.Fatalf("unexpected TC assignment reserved offset: %d", offset)
+	}
 }
 
 func TestSameTCAssignmentIgnoresOnlyActivity(t *testing.T) {

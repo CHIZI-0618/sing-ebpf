@@ -172,6 +172,7 @@ type TCAssignment struct {
 	SourceMACValid    uint8
 	Generation        uint32
 	NetworkGeneration uint32
+	Reserved          [4]byte
 }
 
 // TCAssignmentSweepResult describes one bounded cleanup pass. Entries are

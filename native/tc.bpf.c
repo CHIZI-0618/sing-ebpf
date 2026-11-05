@@ -153,6 +153,7 @@ struct sb_tc_assign_value {
     __u8 source_mac_valid;
     __u32 generation;
     __u32 network_generation;
+    __u8 reserved[4];
 };
 
 struct sb_tc_assignment_claim {
