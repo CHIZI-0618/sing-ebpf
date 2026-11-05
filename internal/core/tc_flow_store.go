@@ -11,5 +11,21 @@ type tcFlowStore struct {
 }
 
 func (s *tcFlowStore) reset() {
-	*s = tcFlowStore{}
+	s.assignment.reset()
+	s.returns.reset()
+}
+
+func (s *tcAssignmentStore) reset() {
+	s.mapFD = 0
+	s.capacity = 0
+	s.sweepRemoved = 0
+	s.sweepScratch = mapScanScratch[tcAssignKey, TCAssignment]{}
+	s.candidates = nil
+}
+
+func (s *tcReturnStore) reset() {
+	s.references = nil
+	s.sweepRemoved = 0
+	s.sweepScratch = mapScanScratch[tcAssignKey, tcReturnValue]{}
+	s.fragmentScratch = mapScanScratch[tcAssignKey, tcReturnValue]{}
 }

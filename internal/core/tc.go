@@ -998,8 +998,15 @@ func (b *TCBackend) Close() error {
 	if b == nil {
 		return nil
 	}
+	// Keep the same order used by SweepFlows: assignment traversal, backend
+	// lifetime, then return-route references. This prevents a sweep waiting for
+	// the backend lock while Close clears the sweep state or closes its maps.
+	b.flowStore.assignment.sweepAccess.Lock()
+	defer b.flowStore.assignment.sweepAccess.Unlock()
 	b.access.Lock()
 	defer b.access.Unlock()
+	b.flowStore.returns.access.Lock()
+	defer b.flowStore.returns.access.Unlock()
 	if b.runtime == nil {
 		return nil
 	}
