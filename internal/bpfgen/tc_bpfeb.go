@@ -34,6 +34,7 @@ const (
 	TCMapTcLocalForce4                           = "tc_local_force4"
 	TCMapTcLocalForce6                           = "tc_local_force6"
 	TCMapTcReturn                                = "tc_return"
+	TCMapTcReturnClaim                           = "tc_return_claim"
 	TCMapTcReturnFrag                            = "tc_return_frag"
 	TCMapTcSelfSockets                           = "tc_self_sockets"
 	TCMapTcSharedBypassIpv4                      = "tc_shared_bypass_ipv4"
@@ -131,6 +132,7 @@ type TCMapSpecs struct {
 	TcLocalForce4       *ebpf.MapSpec `ebpf:"tc_local_force4"`
 	TcLocalForce6       *ebpf.MapSpec `ebpf:"tc_local_force6"`
 	TcReturn            *ebpf.MapSpec `ebpf:"tc_return"`
+	TcReturnClaim       *ebpf.MapSpec `ebpf:"tc_return_claim"`
 	TcReturnFrag        *ebpf.MapSpec `ebpf:"tc_return_frag"`
 	TcSelfSockets       *ebpf.MapSpec `ebpf:"tc_self_sockets"`
 	TcSharedBypassIpv4  *ebpf.MapSpec `ebpf:"tc_shared_bypass_ipv4"`
@@ -186,6 +188,7 @@ type TCMaps struct {
 	TcLocalForce4       *ebpf.Map `ebpf:"tc_local_force4"`
 	TcLocalForce6       *ebpf.Map `ebpf:"tc_local_force6"`
 	TcReturn            *ebpf.Map `ebpf:"tc_return"`
+	TcReturnClaim       *ebpf.Map `ebpf:"tc_return_claim"`
 	TcReturnFrag        *ebpf.Map `ebpf:"tc_return_frag"`
 	TcSelfSockets       *ebpf.Map `ebpf:"tc_self_sockets"`
 	TcSharedBypassIpv4  *ebpf.Map `ebpf:"tc_shared_bypass_ipv4"`
@@ -217,6 +220,7 @@ func (m *TCMaps) Close() error {
 		m.TcLocalForce4,
 		m.TcLocalForce6,
 		m.TcReturn,
+		m.TcReturnClaim,
 		m.TcReturnFrag,
 		m.TcSelfSockets,
 		m.TcSharedBypassIpv4,

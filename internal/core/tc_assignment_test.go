@@ -46,6 +46,15 @@ func newTestAssignmentBackend(t *testing.T) *TCBackend {
 	}
 	t.Cleanup(func() { _ = returnMap.Close() })
 	backend.runtime.maps["tc_return"] = returnMap
+	returnClaimMap, err := CiliumEBPF.NewMap(&CiliumEBPF.MapSpec{
+		Type: CiliumEBPF.Hash, Flags: bpfFlagNoPrealloc,
+		KeySize: uint32(unsafe.Sizeof(tcAssignKey{})), ValueSize: uint32(unsafe.Sizeof(tcReturnClaim{})), MaxEntries: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = returnClaimMap.Close() })
+	backend.runtime.maps["tc_return_claim"] = returnClaimMap
 	backend.assignmentMapFD = assignmentMap.FD()
 	return backend
 }

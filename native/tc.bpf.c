@@ -159,6 +159,12 @@ struct sb_tc_assignment_claim {
     __u32 state;
 };
 
+struct sb_tc_return_claim {
+    __u64 generation;
+    __u32 state;
+    __u32 reserved;
+};
+
 _Static_assert(sizeof(struct sb_tc_control) == 32, "sb_tc_control ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_control, delivery_ifindex) == 8,
     "sb_tc_control delivery_ifindex ABI offset");
@@ -177,6 +183,9 @@ _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, generation) == 28,
 _Static_assert(sizeof(struct sb_tc_assignment_claim) == 16, "sb_tc_assignment_claim ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_assignment_claim, state) == 12,
     "sb_tc_assignment_claim state ABI offset");
+_Static_assert(sizeof(struct sb_tc_return_claim) == 16, "sb_tc_return_claim ABI size");
+_Static_assert(__builtin_offsetof(struct sb_tc_return_claim, state) == 8,
+    "sb_tc_return_claim state ABI offset");
 
 struct ethernet_header {
     __u8 destination[6];
