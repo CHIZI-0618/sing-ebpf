@@ -13,6 +13,6 @@ func TestCgroupRecoveryStoreResetPreservesLockedAccess(t *testing.T) {
 	store.reset()
 	store.access.Unlock()
 	if store.scratch.cursorValid || store.candidates != nil || store.removed != 0 {
-		t.Fatalf("reset left recovery state: scratch=%+v candidates=%d removed=%d", store.scratch, len(store.candidates), store.removed)
+		t.Fatalf("reset left recovery state: cursor_valid=%v candidates=%d removed=%d", store.scratch.cursorValid, len(store.candidates), store.removed)
 	}
 }
