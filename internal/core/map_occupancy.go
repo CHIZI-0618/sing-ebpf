@@ -58,7 +58,14 @@ const (
 	mapEvictionLRUSafeCache = "lru_safe_cache"
 )
 
-var configuredPolicyMapMetadata = map[string]mapMetadata{
+// mapMetadataRegistry is the single semantic source for maps owned by
+// sing-ebpf. Native objects and loader overrides still own their ABI and
+// capacities; this registry only describes how a map is interpreted by
+// diagnostics and maintenance. Keeping policy, core state and disposable
+// caches together prevents each backend from growing another name switch.
+var mapMetadataRegistry = map[string]mapMetadata{
+	// Compiled policy maps are sized from the active policy and are not runtime
+	// pressure evidence.
 	"sb_cg_force4":    {category: MapCategoryConfiguredPolicy},
 	"sb_cg_force6":    {category: MapCategoryConfiguredPolicy},
 	"sb_tc_lforce4":   {category: MapCategoryConfiguredPolicy},
@@ -86,21 +93,35 @@ var configuredPolicyMapMetadata = map[string]mapMetadata{
 	"sb_sh_inmac":     {category: MapCategoryConfiguredPolicy},
 	"sb_sh_exmac":     {category: MapCategoryConfiguredPolicy},
 	"sb_sh_port":      {category: MapCategoryConfiguredPolicy},
+
+	// Disposable LRU state may be reclaimed without invalidating an established
+	// flow. Core runtime state is non-evicting and admission-critical.
+	"sb_tc_rfrag":     {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache},
+	"sb_cg_recover":   {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache},
+	"sb_cg_tcp":       {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache, admissionCritical: true},
+	"sb_cg_tcp_peer":  {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache, admissionCritical: true},
+	"sb_cg_flow":      {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache},
+	"sb_sh_bypass":    {category: MapCategoryRuntime, evictionMode: mapEvictionLRUSafeCache},
+	"sb_self_sockets": {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_sock_byp":  {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_sk_peer":   {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_udp":       {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_token":     {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_token_rev": {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_cg_peer":      {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_tc_assign":    {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_tc_return":    {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_sh_orig":      {category: MapCategoryRuntime, admissionCritical: true},
+	"sb_sh_token":     {category: MapCategoryRuntime, admissionCritical: true},
 }
 
 func metadataForMapName(name string) mapMetadata {
-	if metadata, ok := configuredPolicyMapMetadata[name]; ok {
+	metadata, ok := mapMetadataRegistry[name]
+	if !ok {
+		metadata = mapMetadata{category: MapCategoryRuntime}
+	}
+	if metadata.evictionMode == "" {
 		metadata.evictionMode = mapEvictionNone
-		return metadata
-	}
-	metadata := mapMetadata{category: MapCategoryRuntime, evictionMode: mapEvictionNone}
-	switch name {
-	case "sb_tc_rfrag", "sb_cg_recover", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_flow", "sb_sh_bypass":
-		metadata.evictionMode = mapEvictionLRUSafeCache
-	}
-	switch name {
-	case "sb_self_sockets", "sb_cg_sock_byp", "sb_cg_tcp", "sb_cg_tcp_peer", "sb_cg_sk_peer", "sb_cg_udp", "sb_cg_token", "sb_cg_token_rev", "sb_cg_peer", "sb_tc_assign", "sb_tc_return", "sb_sh_orig", "sb_sh_token":
-		metadata.admissionCritical = true
 	}
 	return metadata
 }
