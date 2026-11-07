@@ -123,6 +123,11 @@ application may alias them behind adapter-side bridge files so its startup,
 monitoring, diagnostics, retry scheduling, and shutdown remain independent of
 implementation details.
 
+On-demand map occupancy is also library-owned. `MapCategory` distinguishes live
+runtime state from capacity derived from compiled policy; `occupancy_mode`,
+`eviction_mode`, and `admission_critical` describe how a consumer should read
+the result. Consumers must not recreate this metadata from kernel map names.
+
 `runtime.TCRuntime.TCDiagnostics` is the boundary for effective TC runtime
 state: attachment mechanism, listener lookup mode, delivery/routing values,
 resource counts, priority, and rebuild status. It is a value-only snapshot

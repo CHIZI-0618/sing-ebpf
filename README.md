@@ -91,8 +91,11 @@ value-level flow and policy operations, and diagnostics. A non-nil
 and must be retained until `Close` succeeds.
 
 On-demand map occupancy diagnostics include library-owned `MapCategory` metadata.
-`runtime` maps describe live state and `configured_policy` maps describe
-capacity derived from the compiled policy; consumers should use this category
+`runtime` maps describe live state, while `configured_policy` maps describe
+capacity derived from the compiled policy. Runtime pressure is reported only
+for maps with a safe exact scan; fixed-layout maps are `not_applicable`, policy
+maps are `configured`, and an iteration error is `recovery_failed`. Consumers
+should use this metadata and the `eviction_mode`/`admission_critical` fields
 instead of maintaining a map-name classification list.
 
 ## Packet paths
