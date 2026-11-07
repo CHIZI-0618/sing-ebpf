@@ -418,11 +418,13 @@ same interface.
 ### LPM trie kernel safety
 
 The LPM maps are created for a uniform object layout, but they are updated only
-when the corresponding policy has entries. Linux 6.6.0 through 6.6.46 has an
-upstream LPM key-layout defect that can trigger an out-of-bounds report, or a
-kernel fault on affected UBSAN/fortify builds, during an update. The upstream
-fix (`bpf_lpm_trie_key_u8`) is present in 6.6.47 and may be backported by a
-vendor.
+when the corresponding policy has entries. Consumers may omit a redundant
+force-intercept prefix when their effective default action already intercepts
+the same traffic; the library does not infer that optimization or interpret
+FakeIP. Linux 6.6.0 through 6.6.46 has an upstream LPM key-layout defect that
+can trigger an out-of-bounds report, or a kernel fault on affected
+UBSAN/fortify builds, during an update. The upstream fix
+(`bpf_lpm_trie_key_u8`) is present in 6.6.47 and may be backported by a vendor.
 
 Because a generic map-type probe cannot safely detect this defect, policy setup
 uses a conservative release check for that range and accepts it only when the
