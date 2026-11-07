@@ -89,11 +89,12 @@ func (m SelfBypassMode) String() string {
 }
 
 // CleanupMode reports how entries in the self-bypass map are removed.
-// The map itself never silently evicts entries; when no release hook is
-// available, callers must explicitly unregister sockets.
+// UserspaceRelease deliberately reports userspace_unregister as well: its
+// release hook is only a fallback, while the owner that registered the socket
+// remains responsible for deleting it before close.
 func (m SelfBypassMode) CleanupMode() string {
 	switch m {
-	case SelfBypassCgroupSocket, SelfBypassCgroupSocketAddrRelease, SelfBypassUserspaceRelease:
+	case SelfBypassCgroupSocket, SelfBypassCgroupSocketAddrRelease:
 		return "socket_release"
 	default:
 		return "userspace_unregister"
@@ -569,7 +570,8 @@ func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 }
 
 // UnregisterSocket removes a socket previously registered by RegisterSocket.
-// Call it before closing the socket when no kernel release hook is active.
+// Call it before closing the socket. A kernel release hook may also delete the
+// same entry; deletion is intentionally idempotent for that dual-cleanup path.
 // The cookie is read from the supplied live socket, so deletion cannot target
 // a different socket that reused an old descriptor.
 func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
@@ -578,7 +580,7 @@ func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
-	if b.sockets == nil || b.Mode().CleanupMode() == "socket_release" {
+	if b.sockets == nil {
 		return nil
 	}
 	var cookie uint64
@@ -594,6 +596,9 @@ func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
 		return nil
 	}
 	if err = b.sockets.Delete(&cookie); err != nil {
+		if errors.Is(err, CiliumEBPF.ErrKeyNotExist) || errors.Is(err, unix.ENOENT) {
+			return nil
+		}
 		return E.Cause(err, "unregister eBPF self-bypass socket")
 	}
 	return nil

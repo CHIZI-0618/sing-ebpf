@@ -192,7 +192,7 @@ func TestSelfBypassModes(t *testing.T) {
 		{SelfBypassCgroupSocket, "cgroup_socket_cookie", "socket_release", true},
 		{SelfBypassCgroupSocketAddr, "cgroup_socket_addr", "userspace_unregister", true},
 		{SelfBypassCgroupSocketAddrRelease, "cgroup_socket_addr_release", "socket_release", true},
-		{SelfBypassUserspaceRelease, "userspace_socket_cookie_release", "socket_release", false},
+		{SelfBypassUserspaceRelease, "userspace_socket_cookie_release", "userspace_unregister", false},
 	}
 	for _, test := range tests {
 		if test.mode.String() != test.name {
@@ -307,5 +307,15 @@ func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	var value uint32
 	if err = sockets.Lookup(&cookie, &value); err != nil || value != 1 {
 		t.Fatalf("registered socket missing from the map: value=%d err=%v", value, err)
+	}
+	// UserspaceRelease uses the kernel hook only as a fallback. The userspace
+	// owner must still be able to remove its entry, and a second removal is
+	// harmless when the kernel hook races with it.
+	bypass.mode.Store(uint32(SelfBypassUserspaceRelease))
+	if err = bypass.UnregisterSocket(rawConn); err != nil {
+		t.Fatalf("userspace-release unregister failed: %v", err)
+	}
+	if err = bypass.UnregisterSocket(rawConn); err != nil {
+		t.Fatalf("userspace-release duplicate unregister failed: %v", err)
 	}
 }
