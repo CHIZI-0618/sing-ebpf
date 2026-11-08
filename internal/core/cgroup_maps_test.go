@@ -10,6 +10,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestCgroupSocketPeerStorageMapABI(t *testing.T) {
+	key := cgroupSocketPeerStorageKeyType()
+	value := cgroupSocketPeerStorageValueType()
+	if key.TypeName() != "int" || value.TypeName() != "sb_ebpf_socket_peer_storage" {
+		t.Fatalf("unexpected sk_storage BTF types: key=%s value=%s", key.TypeName(), value.TypeName())
+	}
+}
+
 func TestCgroupNetworkGenerationABI(t *testing.T) {
 	if size := unsafe.Sizeof(cgroupControl{}); size != 40 {
 		t.Fatalf("unexpected cgroup control size: %d", size)

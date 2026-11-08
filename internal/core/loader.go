@@ -12,6 +12,7 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 
 	CiliumEBPF "github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sys/unix"
 )
@@ -246,6 +247,10 @@ type mapSpecOverride struct {
 	mapType    CiliumEBPF.MapType
 	maxEntries uint32
 	flags      uint32
+	keySize    uint32
+	valueSize  uint32
+	keyType    btf.Type
+	valueType  btf.Type
 }
 
 func validateKernelObjectName(name string) error {
@@ -283,6 +288,18 @@ func loadObjectMaps(
 		mapSpec.Type = override.mapType
 		mapSpec.MaxEntries = override.maxEntries
 		mapSpec.Flags = override.flags
+		if override.keySize != 0 {
+			mapSpec.KeySize = override.keySize
+		}
+		if override.valueSize != 0 {
+			mapSpec.ValueSize = override.valueSize
+		}
+		if override.keyType != nil {
+			mapSpec.Key = override.keyType
+		}
+		if override.valueType != nil {
+			mapSpec.Value = override.valueType
+		}
 		mapSpec.Extra = nil
 	}
 	for name := range overrides {

@@ -40,6 +40,9 @@ MAP(tc_return, struct sb_tc_assign_key, struct sb_tc_return_value, BPF_MAP_TYPE_
 MAP(tc_return_frag, struct sb_tc_assign_key, struct sb_tc_return_value, BPF_MAP_TYPE_LRU_HASH, 1024U);
 
 static long (*skb_change_type)(void *ctx, __u32 type) = (void *)BPF_FUNC_skb_change_type;
+static long (*skb_adjust_room)(void *ctx, __s32 len_diff, __u32 mode, __u64 flags) = (void *)BPF_FUNC_skb_adjust_room;
+
+#define SB_TC_SHARED_RETURN_HEADROOM 128
 
 INLINE void reverse_flow(struct sb_tc_assign_key *reverse, const struct sb_tc_assign_key *flow) {
     *reverse = *flow;
@@ -292,5 +295,11 @@ int sing_ebpf_tc_isolated_return(struct __sk_buff *skb) {
     }
     if (skb_change_type(skb, 0U) != 0) return TC_ACT_SHOT;
     skb->mark = 0U;
+    // bpf_redirect skips the stack's skb_cow_head(); Broadcom DHD stalls its AC_BE flow ring
+    // on veth replies without room for its msgbuf header. Grow then shrink to reserve it.
+    if ((value.flags & 0xffU) == SB_TC_PATH_SHARED &&
+        skb_adjust_room(skb, SB_TC_SHARED_RETURN_HEADROOM, BPF_ADJ_ROOM_NET, BPF_F_ADJ_ROOM_FIXED_GSO) == 0 &&
+        skb_adjust_room(skb, -SB_TC_SHARED_RETURN_HEADROOM, BPF_ADJ_ROOM_NET, BPF_F_ADJ_ROOM_FIXED_GSO) != 0)
+        return TC_ACT_SHOT;
     return redirect(value.ifindex, (value.flags & 0xffU) == SB_TC_PATH_DELIVERY ? BPF_F_INGRESS : 0U);
 }

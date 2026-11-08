@@ -410,3 +410,39 @@ func TestSharedPacketRewriteFragmentPolicyIntegration(t *testing.T) {
 		t.Fatalf("egress fragment passes = %d, want 2", passes)
 	}
 }
+
+// The shared return path grows and shrinks headroom before bpf_redirect; the
+// reply must still leave byte-identical apart from the rewritten MACs.
+func TestTCIsolatedSharedReturnIntegration(t *testing.T) {
+	requireEBPFIntegration(t, "run the isolated return program on a shared reply")
+	requireTCSocketAssignment(t)
+	policy, err := CompileActionPolicy(ActionPolicy{Local: ActionScope{Default: DecisionIntercept}, Shared: ActionScope{Default: DecisionIntercept}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := PrepareTC(TCConfig{DeliveryInterface: 1, ListenerPort: 65532, EnableShared: true, EnableIPv4: true, EnableTCP: true, Policy: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+	if err = backend.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	client, server := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("203.0.113.10")
+	request := testIPv4TCPPacket(client, server, 53000, 443)
+	if action, _ := runTCProgram(t, backend.runtime.programs[tcProgramSharedIngressEthernet], request); action != testTCActRedirect {
+		t.Fatalf("request did not reach socket assignment: action=%d", action)
+	}
+	reply := testIPv4TCPPacket(server, client, 443, 53000)
+	copy(reply[0:12], []byte{0xaa, 0, 0, 0, 0, 1, 0xaa, 0, 0, 0, 0, 2})
+	action, output := runTCProgram(t, backend.runtime.programs[tcProgramIsolatedReturn], reply)
+	if action != testTCActRedirect {
+		t.Fatalf("reply was not redirected: action=%d", action)
+	}
+	if !bytes.Equal(output[0:6], request[6:12]) || !bytes.Equal(output[6:12], request[0:6]) {
+		t.Fatalf("reply MACs = %x, want destination %x source %x", output[0:12], request[6:12], request[0:6])
+	}
+	if !bytes.Equal(output[12:], reply[12:]) {
+		t.Fatalf("reply payload changed:\n got %x\nwant %x", output[12:], reply[12:])
+	}
+}

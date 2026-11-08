@@ -9,12 +9,47 @@ import (
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/ringbuf"
 	"golang.org/x/sys/unix"
 )
 
+// The sk_storage map is declared as a minimal bpf_map_def in the generated
+// object because the program only needs the kernel socket as its key. Android
+// GKI kernels nevertheless validate the full local-storage ABI at map-create
+// time: a four-byte integer key, BPF_F_NO_PREALLOC, and non-zero BTF IDs for
+// both key and value. Keep those types here, next to the override that uses
+// them, so the object and loader share one documented ABI.
+func cgroupSocketPeerStorageKeyType() btf.Type {
+	return &btf.Int{Name: "int", Size: 4, Encoding: btf.Signed}
+}
+
+func cgroupSocketPeerStorageValueType() btf.Type {
+	u8 := &btf.Int{Name: "__u8", Size: 1, Encoding: btf.Unsigned}
+	u16 := &btf.Int{Name: "__u16", Size: 2, Encoding: btf.Unsigned}
+	u32 := &btf.Int{Name: "__u32", Size: 4, Encoding: btf.Unsigned}
+	peer := &btf.Struct{
+		Name: "sb_ebpf_udp_peer_value",
+		Size: 20,
+		Members: []btf.Member{
+			{Name: "family", Type: u8, Offset: 0},
+			{Name: "protocol", Type: u8, Offset: 8},
+			{Name: "port", Type: u16, Offset: 16},
+			{Name: "addr", Type: &btf.Array{Index: u32, Type: u8, Nelems: 16}, Offset: 32},
+		},
+	}
+	return &btf.Struct{
+		Name:    "sb_ebpf_socket_peer_storage",
+		Size:    20,
+		Members: []btf.Member{{Name: "peer", Type: peer, Offset: 0}},
+	}
+}
+
 func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, uidEntries int, localPortEntries int, selfBypassMap *CiliumEBPF.Map, force dualStackCIDRPrefixes) error {
+	// A failed sk_storage attempt is retried with the cookie-map object; only
+	// the attempt that loads may report why release notification is off.
+	runtimeState.udp_release_fallback_reason = ""
 	udpLayout := cgroupUDPMapConfiguration(
 		runtimeState.enable_udp,
 		runtimeState.socket_release_supported,
@@ -57,7 +92,11 @@ func prepareCgroupMaps(runtimeState *cgroupRuntime, capacity CgroupMapCapacity, 
 	}
 	loadSpec := loadCgroup
 	if runtimeState.sk_storage {
-		overrides["cgroup_socket_peer_storage"] = mapSpecOverride{name: "sb_cg_sk_peer", mapType: CiliumEBPF.SkStorage}
+		overrides["cgroup_socket_peer_storage"] = mapSpecOverride{
+			name: "sb_cg_sk_peer", mapType: CiliumEBPF.SkStorage,
+			flags: bpfFlagNoPrealloc, keySize: 4, valueSize: 20,
+			keyType: cgroupSocketPeerStorageKeyType(), valueType: cgroupSocketPeerStorageValueType(),
+		}
 		loadSpec = loadCgroupStorage
 		if runtimeState.coarse_time_supported {
 			loadSpec = loadCgroupStorageCoarse

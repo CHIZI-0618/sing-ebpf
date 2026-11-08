@@ -200,6 +200,12 @@ func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
 	if b == nil || rawConn == nil {
 		return false, nil
 	}
+	b.access.RLock()
+	closed := b.closed
+	b.access.RUnlock()
+	if closed {
+		return false, errSelfBypassClosed
+	}
 	mark, mask, enabled := b.SocketMarkConfig()
 	if !enabled || mask == 0 {
 		return false, nil
