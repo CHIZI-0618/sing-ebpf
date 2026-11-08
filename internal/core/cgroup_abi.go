@@ -133,6 +133,7 @@ type CgroupConfig struct {
 	SelfBypassMap      *CiliumEBPF.Map
 	SelfBypassMark     uint32
 	SelfBypassMarkMask uint32
+	selfBypass         *SelfBypass
 }
 
 func DefaultCgroupMapCapacity() CgroupMapCapacity {

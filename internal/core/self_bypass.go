@@ -165,14 +165,33 @@ func (b *SelfBypass) SocketMarkConfig() (mark, mask uint32, enabled bool) {
 	if b == nil {
 		return 0, 0, false
 	}
+	b.access.RLock()
+	defer b.access.RUnlock()
 	return b.socketMark, b.socketMarkMask, b.socketMarkEnabled
+}
+
+// disableSocketMark is used when a selected data-plane object cannot read
+// socket marks on the running kernel. The cookie-map path remains available;
+// disabling the mark before any new sockets are created prevents the control
+// plane from assuming that a mark-only bypass is active.
+func (b *SelfBypass) disableSocketMark() {
+	if b == nil {
+		return
+	}
+	b.access.Lock()
+	b.socketMarkEnabled = false
+	b.access.Unlock()
 }
 
 // ApplySocketMark applies the self-bypass bits while preserving other routing
 // mark bits. If the reserved marker bits are already occupied, it declines to
 // modify the socket so the caller can use the cookie-map fallback.
 func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
-	if b == nil || !b.socketMarkEnabled || b.socketMarkMask == 0 {
+	if b == nil || rawConn == nil {
+		return false, nil
+	}
+	mark, mask, enabled := b.SocketMarkConfig()
+	if !enabled || mask == 0 {
 		return false, nil
 	}
 	var applied bool
@@ -182,10 +201,10 @@ func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
 			return err
 		}
 		currentMark := uint32(current)
-		if currentMark&b.socketMarkMask != 0 {
+		if currentMark&mask != 0 {
 			return nil
 		}
-		next := currentMark | (b.socketMark & b.socketMarkMask)
+		next := currentMark | (mark & mask)
 		if err = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(next)); err != nil {
 			return err
 		}
@@ -193,7 +212,7 @@ func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
 		if err != nil {
 			return err
 		}
-		if uint32(readBack)&b.socketMarkMask != b.socketMark {
+		if uint32(readBack)&mask != mark {
 			return E.New("socket did not retain the eBPF self-bypass mark")
 		}
 		applied = true

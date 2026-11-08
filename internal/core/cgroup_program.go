@@ -62,15 +62,7 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 	}
 	normalSelections := selections
 	normalSlots := slots
-	loadSpec := loadCgroup
-	if b.runtime.sk_storage {
-		loadSpec = loadCgroupStorage
-		if b.runtime.coarse_time_supported {
-			loadSpec = loadCgroupStorageCoarse
-		}
-	} else if b.runtime.coarse_time_supported {
-		loadSpec = loadCgroupCoarse
-	}
+	loadSpec := cgroupLoadSpec(b.runtime)
 	normalMaps := b.runtime.maps
 	loaded, err := loadObjectPrograms(loadSpec, normalMaps, normalSelections)
 	if err != nil && (b.runtime.getpeername4_supported || b.runtime.getpeername6_supported) {
@@ -82,12 +74,31 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 	}
 	if err != nil && b.runtime.coarse_time_supported && coarseTimeUnavailable(err) {
 		b.runtime.coarse_time_supported = false
-		if b.runtime.sk_storage {
-			loadSpec = loadCgroupStorage
-		} else {
-			loadSpec = loadCgroup
-		}
+		loadSpec = cgroupLoadSpec(b.runtime)
 		loaded, err = loadObjectPrograms(loadSpec, normalMaps, normalSelections)
+	}
+	if err != nil && b.runtime.socket_mark_supported {
+		// Linux 4.19 accepts the cgroup hooks but rejects reads of
+		// bpf_sock->mark in the verifier. Retry the same program set without
+		// that optional fast path, then disable userspace mark-only bypass so
+		// cookie registration remains the active fallback for this backend.
+		noMarkLoaded, noMarkErr := loadObjectPrograms(cgroupNoMarkLoadSpec(b.runtime), normalMaps, normalSelections)
+		if noMarkErr == nil {
+			loaded = noMarkLoaded
+			err = nil
+			b.runtime.socket_mark_supported = false
+			b.selfBypassMark = 0
+			b.selfBypassMarkMask = 0
+			if b.selfBypass != nil {
+				b.selfBypass.disableSocketMark()
+			}
+			if b.listenerPort != 0 {
+				if controlErr := b.updateCgroupControl(b.listenerPort); controlErr != nil {
+					_ = closePrograms(noMarkLoaded)
+					return nil, E.Cause(controlErr, "disable unsupported cgroup socket-mark bypass")
+				}
+			}
+		}
 	}
 	if err != nil {
 		if b.runtime.udp_release_observer {
@@ -108,6 +119,35 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 		return nil, err
 	}
 	return programs, nil
+}
+
+func cgroupLoadSpec(runtimeState *cgroupRuntime) func() (*CiliumEBPF.CollectionSpec, error) {
+	if runtimeState.socket_mark_supported {
+		if runtimeState.sk_storage {
+			if runtimeState.coarse_time_supported {
+				return loadCgroupStorageCoarse
+			}
+			return loadCgroupStorage
+		}
+		if runtimeState.coarse_time_supported {
+			return loadCgroupCoarse
+		}
+		return loadCgroup
+	}
+	return cgroupNoMarkLoadSpec(runtimeState)
+}
+
+func cgroupNoMarkLoadSpec(runtimeState *cgroupRuntime) func() (*CiliumEBPF.CollectionSpec, error) {
+	if runtimeState.sk_storage {
+		if runtimeState.coarse_time_supported {
+			return loadCgroupStorageCoarseNoMark
+		}
+		return loadCgroupStorageNoMark
+	}
+	if runtimeState.coarse_time_supported {
+		return loadCgroupCoarseNoMark
+	}
+	return loadCgroupNoMark
 }
 
 func (b *CgroupBackend) disableUDPReleaseObserver() error {

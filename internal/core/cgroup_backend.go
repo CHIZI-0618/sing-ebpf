@@ -97,6 +97,7 @@ type cgroupRuntime struct {
 	getpeername4_supported bool
 	getpeername6_supported bool
 	coarse_time_supported  bool
+	socket_mark_supported  bool
 	enable_tcp             bool
 	enable_udp             bool
 	uid_policy             bool
@@ -140,6 +141,7 @@ type CgroupBackend struct {
 	listenerPort           uint16
 	selfBypassMark         uint32
 	selfBypassMarkMask     uint32
+	selfBypass             *SelfBypass
 }
 
 func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
@@ -270,6 +272,7 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		coarse_time_supported:    coarseTimeSupported,
 		getpeername4_supported:   probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet4GetPeername),
 		getpeername6_supported:   probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet6GetPeername),
+		socket_mark_supported:    true,
 	}
 	if err = prepareCgroupMaps(runtimeState, mapCapacity, len(uidPolicyEntries), len(policy.localBypassPortEntries), config.SelfBypassMap, policy.localForce); err != nil {
 		if runtimeState.sk_storage {
@@ -314,6 +317,7 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		udpTimeoutSeconds:   udpTimeoutSeconds,
 		selfBypassMark:      config.SelfBypassMark,
 		selfBypassMarkMask:  config.SelfBypassMarkMask,
+		selfBypass:          config.selfBypass,
 		bypassIPv4CIDR:      slices.Clone(policy.localInitialBypass.ipv4),
 		bypassIPv6CIDR:      slices.Clone(policy.localInitialBypass.ipv6),
 	}

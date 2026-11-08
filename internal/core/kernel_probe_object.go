@@ -92,6 +92,7 @@ func loadCgroupProbeObject(plan kernelProbePlan) (string, error) {
 		enable_tcp:             plan.enableTCP,
 		enable_udp:             plan.enableUDP,
 		coarse_time_supported:  plan.enableUDP && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnKtimeGetCoarseNs) == nil,
+		socket_mark_supported:  true,
 		getpeername4_supported: probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet4GetPeername),
 		getpeername6_supported: probeGetpeernameSupport(CiliumEBPF.AttachCgroupInet6GetPeername),
 	}

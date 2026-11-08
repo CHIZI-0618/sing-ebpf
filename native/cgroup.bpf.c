@@ -160,11 +160,20 @@ INLINE bool is_cookie_bypassed(__u64 cookie) {
         (*metadata & SB_EBPF_SOCKET_METADATA_SELF_BYPASS) != 0U;
 }
 
+#ifndef SB_EBPF_DISABLE_SOCKET_MARK
 INLINE bool socket_mark_bypassed(const struct sb_ebpf_cgroup_control *config,
     const struct bpf_sock *socket) {
     return config->self_bypass_mark_mask != 0U && socket != 0 &&
         (socket->mark & config->self_bypass_mark_mask) == config->self_bypass_mark;
 }
+#else
+INLINE bool socket_mark_bypassed(const struct sb_ebpf_cgroup_control *config,
+    const struct bpf_sock *socket) {
+    (void)config;
+    (void)socket;
+    return false;
+}
+#endif
 
 INLINE bool uid_bypassed(const struct sb_ebpf_cgroup_control *config) {
     if ((config->flags & SB_EBPF_CGROUP_FLAG_UID_POLICY) == 0U) return false;
