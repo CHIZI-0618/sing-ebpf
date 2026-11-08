@@ -633,8 +633,9 @@ var selfBypassOwner = selfBypassOwnerTGID
 
 // selfBypassOwnerTGID returns the thread-group id the marking hooks compare
 // against. bpf_get_current_pid_tgid returns the kernel (initial namespace) TGID.
-// NSpid exposes that same value when the process is in a nested PID namespace;
-// kernels without PID namespace support omit the field and use os.Getpid().
+// NSpid exposes that value as its first field when the process is in a nested
+// PID namespace; kernels without PID namespace support omit the field and use
+// os.Getpid().
 // This avoids depending on /proc/*/ns/pid, which Android kernels may omit even
 // for a process that can otherwise use cgroup BPF.
 func selfBypassOwnerTGID() (uint32, error) {
@@ -646,7 +647,7 @@ func selfBypassOwnerTGID() (uint32, error) {
 			}
 			fields := strings.Fields(line[len("NSpid:"):])
 			if len(fields) > 0 {
-				parsed, parseErr := strconv.Atoi(fields[len(fields)-1])
+				parsed, parseErr := strconv.Atoi(fields[0])
 				if parseErr != nil {
 					return 0, E.Cause(parseErr, "parse process kernel TGID")
 				}
