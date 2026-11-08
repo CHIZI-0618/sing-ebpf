@@ -242,6 +242,8 @@ func (b *CgroupBackend) updateCgroupControl(listenerPort uint16) error {
 		RedirectIPv4Prefix:   ipv4Prefix,
 		RedirectIPv4HostMask: ipv4HostMask,
 		ListenerPort:         listenerPort,
+		SelfBypassMark:       b.selfBypassMark,
+		SelfBypassMarkMask:   b.selfBypassMarkMask,
 	}
 	if b.redirectIPv6.IsValid() {
 		address := b.redirectIPv6.Addr().As16()

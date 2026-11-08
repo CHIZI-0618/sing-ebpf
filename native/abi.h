@@ -42,9 +42,11 @@ struct sb_ebpf_cgroup_control {
     __u16 listener_port;
     __u16 reserved_policy;
     __u8 redirect_ipv6_prefix[8];
+    __u32 self_bypass_mark;
+    __u32 self_bypass_mark_mask;
 };
 
-_Static_assert(sizeof(struct sb_ebpf_cgroup_control) == 32U, "unexpected cgroup control ABI");
+_Static_assert(sizeof(struct sb_ebpf_cgroup_control) == 40U, "unexpected cgroup control ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_cgroup_control, network_generation) == 4U,
     "unexpected cgroup network generation ABI");
 

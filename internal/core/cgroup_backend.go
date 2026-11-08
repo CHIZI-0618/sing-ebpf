@@ -138,6 +138,8 @@ type CgroupBackend struct {
 	udpTimeoutSeconds      uint32
 	networkGeneration      uint32
 	listenerPort           uint16
+	selfBypassMark         uint32
+	selfBypassMarkMask     uint32
 }
 
 func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
@@ -310,6 +312,8 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		enableIPv6:          config.EnableIPv6,
 		enableUDP:           config.EnableUDP,
 		udpTimeoutSeconds:   udpTimeoutSeconds,
+		selfBypassMark:      config.SelfBypassMark,
+		selfBypassMarkMask:  config.SelfBypassMarkMask,
 		bypassIPv4CIDR:      slices.Clone(policy.localInitialBypass.ipv4),
 		bypassIPv6CIDR:      slices.Clone(policy.localInitialBypass.ipv6),
 	}

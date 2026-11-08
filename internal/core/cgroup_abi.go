@@ -65,6 +65,8 @@ type cgroupControl struct {
 	ListenerPort         uint16
 	Reserved             uint16
 	RedirectIPv6Prefix   [8]byte
+	SelfBypassMark       uint32
+	SelfBypassMarkMask   uint32
 }
 
 type udpPeerKey struct {
@@ -119,16 +121,18 @@ func CompactSharedPacketRewriteMapCapacity() SharedPacketRewriteMapCapacity {
 }
 
 type CgroupConfig struct {
-	Path          string
-	EnableTCP     bool
-	EnableUDP     bool
-	EnableIPv6    bool
-	RedirectIPv4  netip.Prefix
-	RedirectIPv6  netip.Prefix
-	MapCapacity   CgroupMapCapacity
-	UDPTimeout    time.Duration
-	Policy        CompiledPolicy
-	SelfBypassMap *CiliumEBPF.Map
+	Path               string
+	EnableTCP          bool
+	EnableUDP          bool
+	EnableIPv6         bool
+	RedirectIPv4       netip.Prefix
+	RedirectIPv6       netip.Prefix
+	MapCapacity        CgroupMapCapacity
+	UDPTimeout         time.Duration
+	Policy             CompiledPolicy
+	SelfBypassMap      *CiliumEBPF.Map
+	SelfBypassMark     uint32
+	SelfBypassMarkMask uint32
 }
 
 func DefaultCgroupMapCapacity() CgroupMapCapacity {

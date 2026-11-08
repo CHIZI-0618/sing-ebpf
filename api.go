@@ -180,6 +180,25 @@ func (b *SelfBypass) CleanupMode() string {
 	return core.UnwrapSelfBypass(b).Mode().CleanupMode()
 }
 
+// SocketMarkConfig returns the preferred stateless self-bypass marker. The
+// marker is disabled when SO_MARK cannot be probed in the current security
+// domain; callers should then use the cookie-map fallback.
+func (b *SelfBypass) SocketMarkConfig() (mark, mask uint32, enabled bool) {
+	if b == nil {
+		return 0, 0, false
+	}
+	return core.UnwrapSelfBypass(b).SocketMarkConfig()
+}
+
+// ApplySocketMark applies the preferred stateless self-bypass marker to a
+// socket. A false result means the caller should use cookie registration.
+func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
+	if b == nil {
+		return false, nil
+	}
+	return core.UnwrapSelfBypass(b).ApplySocketMark(rawConn)
+}
+
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 	if b == nil {
 		return core.UnwrapSelfBypass(nil).RegisterSocket(rawConn)

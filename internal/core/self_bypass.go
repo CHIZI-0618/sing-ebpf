@@ -4,6 +4,7 @@ package core
 
 import (
 	"bufio"
+	cryptorand "crypto/rand"
 	"errors"
 	"math"
 	"os"
@@ -27,10 +28,15 @@ const (
 	// normal concurrent sockets.
 	selfBypassSocketCapacity        = 16384
 	CompactSelfBypassSocketCapacity = 8192
+	// The low byte is reserved for a per-runtime socket marker. Existing
+	// routing marks are preserved; sockets with an occupied low byte use the
+	// cookie-map fallback instead of being rewritten.
+	selfBypassSocketMarkMask = uint32(0xff)
 )
 
-// SelfBypass owns the socket-cookie metadata map used by the local TC classifier.
-// Self-bypass flags are populated by process cgroup hooks or socket controls.
+// SelfBypass owns the socket-cookie metadata fallback used by the local TC
+// classifier and a per-runtime SO_MARK fast path. Self-bypass flags are
+// populated by process cgroup hooks or socket controls.
 // ProcessTracker may also write application UID policy flags into this map;
 // those entries require the tracker's wider cgroup release coverage.
 //
@@ -42,13 +48,16 @@ const (
 // Every path that needs the map creates it first: data-plane preparation
 // (through PreparedMap), cgroup attachment, and socket registration.
 type SelfBypass struct {
-	access   sync.RWMutex
-	capacity uint32
-	sockets  *CiliumEBPF.Map
-	closed   bool
-	programs []*CiliumEBPF.Program
-	links    []cgroupProgramLink
-	mode     atomic.Uint32
+	access            sync.RWMutex
+	capacity          uint32
+	sockets           *CiliumEBPF.Map
+	closed            bool
+	programs          []*CiliumEBPF.Program
+	links             []cgroupProgramLink
+	mode              atomic.Uint32
+	socketMark        uint32
+	socketMarkMask    uint32
+	socketMarkEnabled bool
 }
 
 type SelfBypassCgroupConfig struct {
@@ -110,10 +119,91 @@ func NewSelfBypassWithCapacity(capacity uint32) (*SelfBypass, error) {
 	if capacity == 0 || capacity > MaxConfigurableMapCapacity {
 		return nil, E.New("invalid eBPF self-bypass socket map capacity: ", capacity)
 	}
-	return &SelfBypass{capacity: capacity}, nil
+	mark, mask, enabled := probeSelfBypassSocketMark()
+	return &SelfBypass{
+		capacity:          capacity,
+		socketMark:        mark,
+		socketMarkMask:    mask,
+		socketMarkEnabled: enabled,
+	}, nil
 }
 
 var errSelfBypassClosed = E.New("eBPF self-bypass is closed")
+
+// probeSelfBypassSocketMark chooses a process-local marker and verifies that
+// this process may set and read SO_MARK. A failed probe is deliberately
+// non-fatal: older kernels, containers, and Android SELinux domains continue
+// with cgroup or socket-cookie self-bypass.
+func probeSelfBypassSocketMark() (uint32, uint32, bool) {
+	var randomByte [1]byte
+	if _, err := cryptorand.Read(randomByte[:]); err != nil {
+		return 0, 0, false
+	}
+	mark := uint32(randomByte[0])
+	if mark == 0 {
+		mark = 0xa7
+	}
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer unix.Close(fd)
+	if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, int(mark)); err != nil {
+		return 0, 0, false
+	}
+	readBack, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK)
+	if err != nil || uint32(readBack)&selfBypassSocketMarkMask != mark {
+		return 0, 0, false
+	}
+	return mark, selfBypassSocketMarkMask, true
+}
+
+// SocketMarkConfig returns the marker that data-plane controls should match.
+// The marker is zero when SO_MARK is unavailable and the cookie fallback is
+// the only safe path.
+func (b *SelfBypass) SocketMarkConfig() (mark, mask uint32, enabled bool) {
+	if b == nil {
+		return 0, 0, false
+	}
+	return b.socketMark, b.socketMarkMask, b.socketMarkEnabled
+}
+
+// ApplySocketMark applies the self-bypass bits while preserving other routing
+// mark bits. If the reserved marker bits are already occupied, it declines to
+// modify the socket so the caller can use the cookie-map fallback.
+func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
+	if b == nil || !b.socketMarkEnabled || b.socketMarkMask == 0 {
+		return false, nil
+	}
+	var applied bool
+	err := control.Raw(rawConn, func(fd uintptr) error {
+		current, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK)
+		if err != nil {
+			return err
+		}
+		currentMark := uint32(current)
+		if currentMark&b.socketMarkMask != 0 {
+			return nil
+		}
+		next := currentMark | (b.socketMark & b.socketMarkMask)
+		if err = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(next)); err != nil {
+			return err
+		}
+		readBack, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK)
+		if err != nil {
+			return err
+		}
+		if uint32(readBack)&b.socketMarkMask != b.socketMark {
+			return E.New("socket did not retain the eBPF self-bypass mark")
+		}
+		applied = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return applied, nil
+}
 
 // Prepare creates the socket-cookie map if it does not exist yet. It reports
 // the same errors map creation would, so a privileged runtime can surface
@@ -583,6 +673,18 @@ func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, erro
 // cannot mark it automatically. It performs one SO_COOKIE read and one map
 // update per socket.
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
+	if marked, err := b.ApplySocketMark(rawConn); marked {
+		return nil
+	} else if err != nil {
+		// SO_MARK is an optimization. Continue with the bounded cookie-map
+		// fallback when the socket or its security domain rejects it.
+	}
+	mode := b.Mode()
+	if mode != SelfBypassUserspace && mode != SelfBypassUserspaceRelease {
+		// Cgroup marking modes already cover this socket. Do not grow the
+		// fallback map merely because SO_MARK was unavailable on one socket.
+		return nil
+	}
 	_, err := b.RegisterSocketCookie(rawConn)
 	return err
 }
