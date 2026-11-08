@@ -4,7 +4,6 @@ package core
 
 import (
 	"bufio"
-	cryptorand "crypto/rand"
 	"errors"
 	"math"
 	"os"
@@ -28,15 +27,11 @@ const (
 	// normal concurrent sockets.
 	selfBypassSocketCapacity        = 16384
 	CompactSelfBypassSocketCapacity = 8192
-	// The low byte is reserved for a per-runtime socket marker. Existing
-	// routing marks are preserved; sockets with an occupied low byte use the
-	// cookie-map fallback instead of being rewritten.
-	selfBypassSocketMarkMask = uint32(0xff)
 )
 
 // SelfBypass owns the socket-cookie metadata fallback used by the local TC
-// classifier and a per-runtime SO_MARK fast path. Self-bypass flags are
-// populated by process cgroup hooks or socket controls.
+// classifier. Self-bypass flags are populated by process cgroup hooks or
+// socket controls.
 // ProcessTracker may also write application UID policy flags into this map;
 // those entries require the tracker's wider cgroup release coverage.
 //
@@ -48,16 +43,13 @@ const (
 // Every path that needs the map creates it first: data-plane preparation
 // (through PreparedMap), cgroup attachment, and socket registration.
 type SelfBypass struct {
-	access            sync.RWMutex
-	capacity          uint32
-	sockets           *CiliumEBPF.Map
-	closed            bool
-	programs          []*CiliumEBPF.Program
-	links             []cgroupProgramLink
-	mode              atomic.Uint32
-	socketMark        uint32
-	socketMarkMask    uint32
-	socketMarkEnabled bool
+	access   sync.RWMutex
+	capacity uint32
+	sockets  *CiliumEBPF.Map
+	closed   bool
+	programs []*CiliumEBPF.Program
+	links    []cgroupProgramLink
+	mode     atomic.Uint32
 }
 
 type SelfBypassCgroupConfig struct {
@@ -71,8 +63,7 @@ type SelfBypassMode uint32
 const (
 	SelfBypassUserspace SelfBypassMode = iota
 	SelfBypassCgroupSocket
-	SelfBypassCgroupSocketAddr
-	// SelfBypassCgroupSocketAddrRelease combines socket-address marking with
+	// SelfBypassCgroupSocketAddrRelease combines socket-address registration with
 	// sock_release cleanup. The release hook is best-effort because vendor
 	// kernels may reject it while accepting the address hooks.
 	SelfBypassCgroupSocketAddrRelease
@@ -87,8 +78,6 @@ func (m SelfBypassMode) String() string {
 	switch m {
 	case SelfBypassCgroupSocket:
 		return "cgroup_socket_cookie"
-	case SelfBypassCgroupSocketAddr:
-		return "cgroup_socket_addr"
 	case SelfBypassCgroupSocketAddrRelease:
 		return "cgroup_socket_addr_release"
 	case SelfBypassUserspaceRelease:
@@ -119,126 +108,12 @@ func NewSelfBypassWithCapacity(capacity uint32) (*SelfBypass, error) {
 	if capacity == 0 || capacity > MaxConfigurableMapCapacity {
 		return nil, E.New("invalid eBPF self-bypass socket map capacity: ", capacity)
 	}
-	mark, mask, enabled := probeSelfBypassSocketMark()
 	return &SelfBypass{
-		capacity:          capacity,
-		socketMark:        mark,
-		socketMarkMask:    mask,
-		socketMarkEnabled: enabled,
+		capacity: capacity,
 	}, nil
 }
 
 var errSelfBypassClosed = E.New("eBPF self-bypass is closed")
-
-// probeSelfBypassSocketMark chooses a process-local marker and verifies that
-// this process may set and read SO_MARK. A failed probe is deliberately
-// non-fatal: older kernels, containers, and Android SELinux domains continue
-// with cgroup or socket-cookie self-bypass.
-func probeSelfBypassSocketMark() (uint32, uint32, bool) {
-	var randomByte [1]byte
-	if _, err := cryptorand.Read(randomByte[:]); err != nil {
-		return 0, 0, false
-	}
-	mark := uint32(randomByte[0])
-	if mark == 0 {
-		mark = 0xa7
-	}
-	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return 0, 0, false
-	}
-	defer unix.Close(fd)
-	if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, int(mark)); err != nil {
-		return 0, 0, false
-	}
-	readBack, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK)
-	if err != nil || uint32(readBack)&selfBypassSocketMarkMask != mark {
-		return 0, 0, false
-	}
-	return mark, selfBypassSocketMarkMask, true
-}
-
-// SocketMarkConfig returns the marker that data-plane controls should match.
-// The marker is zero when SO_MARK is unavailable and the cookie fallback is
-// the only safe path.
-func (b *SelfBypass) SocketMarkConfig() (mark, mask uint32, enabled bool) {
-	if b == nil {
-		return 0, 0, false
-	}
-	b.access.RLock()
-	defer b.access.RUnlock()
-	// A marker is only a valid fast path when a cgroup hook is actually
-	// attached. On Android/vendor kernels the SO_MARK socket probe can succeed
-	// even though TC does not preserve that mark on the skb. In userspace
-	// fallback modes the cookie map is the correctness path; advertising the
-	// marker here would let every outbound socket skip cookie registration and
-	// be captured recursively by socket_assign.
-	mode := SelfBypassMode(b.mode.Load())
-	if mode == SelfBypassUserspace || mode == SelfBypassUserspaceRelease {
-		return b.socketMark, b.socketMarkMask, false
-	}
-	return b.socketMark, b.socketMarkMask, b.socketMarkEnabled
-}
-
-// disableSocketMark is used when a selected data-plane object cannot read
-// socket marks on the running kernel. The cookie-map path remains available;
-// disabling the mark before any new sockets are created prevents the control
-// plane from assuming that a mark-only bypass is active.
-func (b *SelfBypass) disableSocketMark() {
-	if b == nil {
-		return
-	}
-	b.access.Lock()
-	b.socketMarkEnabled = false
-	b.access.Unlock()
-}
-
-// ApplySocketMark applies the self-bypass bits while preserving other routing
-// mark bits. If the reserved marker bits are already occupied, it declines to
-// modify the socket so the caller can use the cookie-map fallback.
-func (b *SelfBypass) ApplySocketMark(rawConn syscall.RawConn) (bool, error) {
-	if b == nil || rawConn == nil {
-		return false, nil
-	}
-	b.access.RLock()
-	closed := b.closed
-	b.access.RUnlock()
-	if closed {
-		return false, errSelfBypassClosed
-	}
-	mark, mask, enabled := b.SocketMarkConfig()
-	if !enabled || mask == 0 {
-		return false, nil
-	}
-	var applied bool
-	err := control.Raw(rawConn, func(fd uintptr) error {
-		current, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK)
-		if err != nil {
-			return err
-		}
-		currentMark := uint32(current)
-		if currentMark&mask != 0 {
-			return nil
-		}
-		next := currentMark | (mark & mask)
-		if err = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(next)); err != nil {
-			return err
-		}
-		readBack, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK)
-		if err != nil {
-			return err
-		}
-		if uint32(readBack)&mask != mark {
-			return E.New("socket did not retain the eBPF self-bypass mark")
-		}
-		applied = true
-		return nil
-	})
-	if err != nil {
-		return false, err
-	}
-	return applied, nil
-}
 
 // Prepare creates the socket-cookie map if it does not exist yet. It reports
 // the same errors map creation would, so a privileged runtime can surface
@@ -303,10 +178,10 @@ func (b *SelfBypass) Map() *CiliumEBPF.Map {
 // AttachCgroup enables automatic socket-cookie registration when the current
 // cgroup is exclusive to this process. It first tries socket create/release
 // hooks, then connect/sendmsg hooks for kernels that expose only the latter.
-// The marking hooks only mark sockets of this process's own thread group:
+// The metadata hooks only record sockets of this process's own thread group:
 // child processes started later inherit the cgroup (an embedded SSH server's
 // sessions, for example) and must stay subject to interception. After
-// attaching, a probe socket must be marked; otherwise the hooks are removed.
+// attaching, a probe socket must be recorded; otherwise the hooks are removed.
 // When those hooks cannot be used, it still attempts a release-only hook so
 // userspace registration does not leave entries behind on pure TC systems.
 // A failure leaves the map usable by the userspace registration fallback.
@@ -350,7 +225,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if exclusive {
 		createReleaseErr := b.attachCgroupSocket(cgroupPath, ownerTGID)
 		if createReleaseErr == nil {
-			createReleaseErr = b.verifyOwnerMarking(false, config)
+			createReleaseErr = b.verifyOwnerMetadata(false, config)
 			if createReleaseErr == nil {
 				b.mode.Store(uint32(SelfBypassCgroupSocket))
 				return nil
@@ -365,7 +240,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		}
 		socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config, ownerTGID)
 		if socketAddrErr == nil {
-			socketAddrErr = b.verifyOwnerMarking(true, config)
+			socketAddrErr = b.verifyOwnerMetadata(true, config)
 			if socketAddrErr == nil {
 				if releaseErr := b.attachCgroupRelease(cgroupPath, false); releaseErr == nil {
 					b.mode.Store(uint32(SelfBypassCgroupSocketAddrRelease))
@@ -410,7 +285,7 @@ func (b *SelfBypass) CgroupAttached() bool {
 		return false
 	}
 	mode := SelfBypassMode(b.mode.Load())
-	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddr || mode == SelfBypassCgroupSocketAddrRelease
+	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddrRelease
 }
 
 func (b *SelfBypass) Mode() SelfBypassMode {
@@ -562,7 +437,7 @@ func newSelfBypassSocketAddrProgram(mapFD int, hook selfBypassSocketAddrHook, ow
 	return program, nil
 }
 
-// selfBypassOwnerCheckInstructions skips marking unless the current task
+// selfBypassOwnerCheckInstructions skips recording unless the current task
 // belongs to ownerTGID. bpf_get_current_pid_tgid reports the thread-group id in
 // the initial PID namespace, which selfBypassOwnerTGID guarantees equals
 // os.Getpid. The context pointer is kept in R6 across the helper call and
@@ -711,26 +586,9 @@ func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 	if b == nil {
 		return nil
 	}
-	_, _, markEnabled := b.SocketMarkConfig()
-	if marked, err := b.ApplySocketMark(rawConn); marked {
-		return nil
-	} else if err != nil && !markEnabled {
-		// SO_MARK is an optimization. Continue with the bounded cookie-map
-		// fallback when the socket or its security domain rejects it.
-	}
 	mode := b.Mode()
-	// A successful probe only establishes that this process can mark the
-	// probe socket. A later socket may reject SO_MARK or already carry another
-	// value in the reserved bits. If the mark fast path was selected, register
-	// that individual socket in the cookie map instead of silently allowing it
-	// to be captured.
-	if markEnabled {
-		_, err := b.RegisterSocketCookie(rawConn)
-		return err
-	}
 	if mode != SelfBypassUserspace && mode != SelfBypassUserspaceRelease {
-		// Cgroup marking modes already cover this socket. Do not grow the
-		// fallback map merely because SO_MARK was unavailable on one socket.
+		// Cgroup hooks already cover this socket. Do not grow the fallback map.
 		return nil
 	}
 	_, err := b.RegisterSocketCookie(rawConn)
@@ -777,11 +635,11 @@ func (b *SelfBypass) UnregisterCookie(cookie uint64) error {
 // The probe only connects a UDP socket or sends an empty datagram to loopback.
 const selfBypassProbePort = 9
 
-// selfBypassOwner resolves the marking owner; tests replace it to force the
+// selfBypassOwner resolves the metadata owner; tests replace it to force the
 // post-attach probe to fail.
 var selfBypassOwner = selfBypassOwnerTGID
 
-// selfBypassOwnerTGID returns the thread-group id the marking hooks compare
+// selfBypassOwnerTGID returns the thread-group id the metadata hooks compare
 // against. bpf_get_current_pid_tgid returns the kernel (initial namespace) TGID.
 // NSpid exposes that value as its first field when the process is in a nested
 // PID namespace; kernels without PID namespace support omit the field and use
@@ -812,38 +670,91 @@ func selfBypassOwnerTGID() (uint32, error) {
 	return uint32(pid), nil
 }
 
-// verifyOwnerMarking checks on the running kernel that a socket of this
-// process is marked by the hooks just attached. In cgroup mode the consumer
-// stops registering sockets itself, so hooks that silently mark nothing would
-// let its own traffic be intercepted. socketAddr selects the connect/sendmsg
-// hooks, which mark on use rather than on creation.
-func (b *SelfBypass) verifyOwnerMarking(socketAddr bool, config SelfBypassCgroupConfig) error {
-	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+// verifyOwnerMetadata checks on the running kernel that every requested hook
+// writes self-bypass metadata for a socket owned by this process. In cgroup
+// mode the consumer stops registering sockets itself, so a partially working
+// hook set must not be reported as active.
+func (b *SelfBypass) verifyOwnerMetadata(socketAddr bool, config SelfBypassCgroupConfig) error {
+	if socketAddr {
+		if !config.EnableTCP && !config.EnableUDP {
+			return E.New("eBPF self-bypass socket-address hooks have no enabled protocol")
+		}
+		if config.EnableTCP {
+			if err := b.verifyOwnerSocketAddr(unix.AF_INET, unix.SOCK_STREAM, false, "TCP IPv4 connect"); err != nil {
+				return err
+			}
+			if config.EnableIPv6 {
+				if err := b.verifyOwnerSocketAddr(unix.AF_INET6, unix.SOCK_STREAM, true, "TCP IPv6 connect"); err != nil {
+					return err
+				}
+			}
+		}
+		if config.EnableUDP {
+			if err := b.verifyOwnerSocketAddr(unix.AF_INET, unix.SOCK_DGRAM, false, "UDP IPv4 sendmsg"); err != nil {
+				return err
+			}
+			if config.EnableIPv6 {
+				if err := b.verifyOwnerSocketAddr(unix.AF_INET6, unix.SOCK_DGRAM, true, "UDP IPv6 sendmsg"); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := b.verifyOwnerSocketCreate(unix.AF_INET, "socket-create IPv4"); err != nil {
+		return err
+	}
+	if config.EnableIPv6 {
+		if err := b.verifyOwnerSocketCreate(unix.AF_INET6, "socket-create IPv6"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *SelfBypass) verifyOwnerSocketCreate(family int, label string) error {
+	fd, err := unix.Socket(family, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
-		return E.Cause(err, "create eBPF self-bypass probe socket")
+		return E.Cause(err, "create eBPF self-bypass ", label, " probe socket")
 	}
 	defer unix.Close(fd)
-	if socketAddr {
-		address := &unix.SockaddrInet4{Port: selfBypassProbePort, Addr: [4]byte{127, 0, 0, 1}}
-		if config.EnableTCP {
-			// connect4 also runs for UDP connect and sends nothing.
-			err = unix.Connect(fd, address)
-		} else {
-			err = unix.Sendto(fd, nil, 0, address)
+	return b.verifyOwnerSocketCookie(fd, label)
+}
+
+func (b *SelfBypass) verifyOwnerSocketAddr(family, socketType int, ipv6 bool, label string) error {
+	fd, err := unix.Socket(family, socketType|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return E.Cause(err, "create eBPF self-bypass ", label, " probe socket")
+	}
+	defer unix.Close(fd)
+	if ipv6 {
+		address := &unix.SockaddrInet6{Port: selfBypassProbePort, Addr: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}}
+		if err = unix.Connect(fd, address); err != nil && !errors.Is(err, unix.ECONNREFUSED) {
+			return E.Cause(err, "trigger eBPF self-bypass ", label, " hook")
 		}
-		if err != nil {
-			return E.Cause(err, "trigger eBPF self-bypass probe hook")
+	} else {
+		address := &unix.SockaddrInet4{Port: selfBypassProbePort, Addr: [4]byte{127, 0, 0, 1}}
+		if socketType == unix.SOCK_STREAM {
+			if err = unix.Connect(fd, address); err != nil && !errors.Is(err, unix.ECONNREFUSED) {
+				return E.Cause(err, "trigger eBPF self-bypass ", label, " hook")
+			}
+		} else if err = unix.Sendto(fd, nil, 0, address); err != nil && !errors.Is(err, unix.ECONNREFUSED) {
+			return E.Cause(err, "trigger eBPF self-bypass ", label, " hook")
 		}
 	}
+	return b.verifyOwnerSocketCookie(fd, label)
+}
+
+func (b *SelfBypass) verifyOwnerSocketCookie(fd int, label string) error {
 	cookie, err := unix.GetsockoptUint64(fd, unix.SOL_SOCKET, unix.SO_COOKIE)
 	if err != nil {
-		return E.Cause(err, "read eBPF self-bypass probe socket cookie")
+		return E.Cause(err, "read eBPF self-bypass ", label, " probe socket cookie")
 	}
 	var metadata uint32
 	lookupErr := b.sockets.Lookup(&cookie, &metadata)
 	_ = b.sockets.Delete(&cookie)
 	if lookupErr != nil || metadata&SocketMetadataSelfBypass == 0 {
-		return E.New("eBPF self-bypass hooks did not mark a socket of this process")
+		return E.New("eBPF self-bypass ", label, " hook did not mark a socket of this process")
 	}
 	return nil
 }

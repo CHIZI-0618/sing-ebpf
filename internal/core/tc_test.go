@@ -18,7 +18,7 @@ func TestTCABI(t *testing.T) {
 	if offset := unsafe.Offsetof(tcReturnValue{}.DestinationMAC); offset != 30 {
 		t.Fatalf("unexpected TC return MAC offset: %d", offset)
 	}
-	if size := unsafe.Sizeof(tcControl{}); size != 40 {
+	if size := unsafe.Sizeof(tcControl{}); size != 32 {
 		t.Fatalf("unexpected TC control size: %d", size)
 	}
 	if offset := unsafe.Offsetof(tcControl{}.RoutingMark); offset != 12 {

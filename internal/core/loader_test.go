@@ -348,7 +348,7 @@ func TestEmbeddedCgroupStorageObjectLayout(t *testing.T) {
 
 func TestEmbeddedTCObjectLayout(t *testing.T) {
 	testEmbeddedObjectLayout(t, loadTC, map[string]objectMapLayout{
-		"tc_control":             {4, 40},
+		"tc_control":             {4, 32},
 		"tc_local_force4":        {8, 1},
 		"tc_local_force6":        {20, 1},
 		"tc_shared_force4":       {8, 1},

@@ -39,7 +39,6 @@ func PrepareCgroupWithSelfBypass(config CgroupConfig, value any) (*CgroupBackend
 			return nil, err
 		}
 		config.SelfBypassMap = sockets
-		config.SelfBypassMark, config.SelfBypassMarkMask, _ = bypass.SocketMarkConfig()
 		config.selfBypass = bypass
 	}
 	return PrepareCgroup(config)
@@ -63,7 +62,6 @@ func PrepareTCWithSelfBypass(config TCConfig, value any) (*TCBackend, error) {
 			return nil, err
 		}
 		config.SelfBypassMap = sockets
-		config.SelfBypassMark, config.SelfBypassMarkMask, _ = bypass.SocketMarkConfig()
 	}
 	return PrepareTC(config)
 }

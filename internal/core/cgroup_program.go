@@ -77,29 +77,6 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 		loadSpec = cgroupLoadSpec(b.runtime)
 		loaded, err = loadObjectPrograms(loadSpec, normalMaps, normalSelections)
 	}
-	if err != nil && b.runtime.socket_mark_supported {
-		// Linux 4.19 accepts the cgroup hooks but rejects reads of
-		// bpf_sock->mark in the verifier. Retry the same program set without
-		// that optional fast path, then disable userspace mark-only bypass so
-		// cookie registration remains the active fallback for this backend.
-		noMarkLoaded, noMarkErr := loadObjectPrograms(cgroupNoMarkLoadSpec(b.runtime), normalMaps, normalSelections)
-		if noMarkErr == nil {
-			loaded = noMarkLoaded
-			err = nil
-			b.runtime.socket_mark_supported = false
-			b.selfBypassMark = 0
-			b.selfBypassMarkMask = 0
-			if b.selfBypass != nil {
-				b.selfBypass.disableSocketMark()
-			}
-			if b.listenerPort != 0 {
-				if controlErr := b.updateCgroupControl(b.listenerPort); controlErr != nil {
-					_ = closePrograms(noMarkLoaded)
-					return nil, E.Cause(controlErr, "disable unsupported cgroup socket-mark bypass")
-				}
-			}
-		}
-	}
 	if err != nil {
 		if b.runtime.udp_release_observer {
 			b.runtime.udp_release_fallback_reason = "release_notification_program_load_failed"
@@ -122,32 +99,16 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 }
 
 func cgroupLoadSpec(runtimeState *cgroupRuntime) func() (*CiliumEBPF.CollectionSpec, error) {
-	if runtimeState.socket_mark_supported {
-		if runtimeState.sk_storage {
-			if runtimeState.coarse_time_supported {
-				return loadCgroupStorageCoarse
-			}
-			return loadCgroupStorage
-		}
-		if runtimeState.coarse_time_supported {
-			return loadCgroupCoarse
-		}
-		return loadCgroup
-	}
-	return cgroupNoMarkLoadSpec(runtimeState)
-}
-
-func cgroupNoMarkLoadSpec(runtimeState *cgroupRuntime) func() (*CiliumEBPF.CollectionSpec, error) {
 	if runtimeState.sk_storage {
 		if runtimeState.coarse_time_supported {
-			return loadCgroupStorageCoarseNoMark
+			return loadCgroupStorageCoarse
 		}
-		return loadCgroupStorageNoMark
+		return loadCgroupStorage
 	}
 	if runtimeState.coarse_time_supported {
-		return loadCgroupCoarseNoMark
+		return loadCgroupCoarse
 	}
-	return loadCgroupNoMark
+	return loadCgroup
 }
 
 func (b *CgroupBackend) disableUDPReleaseObserver() error {
@@ -282,8 +243,6 @@ func (b *CgroupBackend) updateCgroupControl(listenerPort uint16) error {
 		RedirectIPv4Prefix:   ipv4Prefix,
 		RedirectIPv4HostMask: ipv4HostMask,
 		ListenerPort:         listenerPort,
-		SelfBypassMark:       b.selfBypassMark,
-		SelfBypassMarkMask:   b.selfBypassMarkMask,
 	}
 	if b.redirectIPv6.IsValid() {
 		address := b.redirectIPv6.Addr().As16()

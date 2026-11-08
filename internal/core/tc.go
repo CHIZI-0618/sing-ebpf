@@ -107,8 +107,6 @@ type TCConfig struct {
 	Policy             CompiledPolicy
 	RoutingMark        uint32
 	SelfBypassMap      *CiliumEBPF.Map
-	SelfBypassMark     uint32
-	SelfBypassMarkMask uint32
 	TrackProcess       bool
 	AssignmentCapacity uint32
 	// NetworkGeneration identifies the current network incarnation. Zero uses
@@ -134,17 +132,15 @@ type tcPortKey struct {
 }
 
 type tcControl struct {
-	Enabled            uint32
-	Flags              uint32
-	DeliveryInterface  uint32
-	RoutingMark        uint32
-	ListenerPort       uint16
-	ReservedPolicy     uint16
-	NetworkGeneration  uint32
-	DeliveryMAC        MACAddress
-	Reserved           uint16
-	SelfBypassMark     uint32
-	SelfBypassMarkMask uint32
+	Enabled           uint32
+	Flags             uint32
+	DeliveryInterface uint32
+	RoutingMark       uint32
+	ListenerPort      uint16
+	ReservedPolicy    uint16
+	NetworkGeneration uint32
+	DeliveryMAC       MACAddress
+	Reserved          uint16
 }
 
 type tcRuntime struct {
@@ -282,13 +278,11 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		networkGeneration = 1
 	}
 	controlValue := tcControl{
-		Flags:              tcFlags(config, policy),
-		DeliveryInterface:  config.DeliveryInterface,
-		RoutingMark:        config.RoutingMark,
-		ListenerPort:       config.ListenerPort,
-		NetworkGeneration:  networkGeneration,
-		SelfBypassMark:     config.SelfBypassMark,
-		SelfBypassMarkMask: config.SelfBypassMarkMask,
+		Flags:             tcFlags(config, policy),
+		DeliveryInterface: config.DeliveryInterface,
+		RoutingMark:       config.RoutingMark,
+		ListenerPort:      config.ListenerPort,
+		NetworkGeneration: networkGeneration,
 	}
 	if len(includeIPv4)+len(includeIPv6) > 0 {
 		controlValue.Flags |= 1 << 12

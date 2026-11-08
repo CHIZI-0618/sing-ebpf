@@ -97,8 +97,6 @@ struct sb_tc_control {
     __u32 network_generation;
     __u8 delivery_mac[6];
     __u16 reserved;
-    __u32 self_bypass_mark;
-    __u32 self_bypass_mark_mask;
 };
 
 struct sb_tc_uid_key {
@@ -165,7 +163,7 @@ struct sb_tc_assignment_claim {
 };
 
 
-_Static_assert(sizeof(struct sb_tc_control) == 40, "sb_tc_control ABI size");
+_Static_assert(sizeof(struct sb_tc_control) == 32, "sb_tc_control ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_control, delivery_ifindex) == 8,
     "sb_tc_control delivery_ifindex ABI offset");
 _Static_assert(__builtin_offsetof(struct sb_tc_control, routing_mark) == 12,
@@ -376,12 +374,6 @@ INLINE __u32 socket_metadata(__u64 socket_cookie) {
     if (socket_cookie == 0U) return 0U;
     __u32 *metadata = map_lookup(&tc_self_sockets, &socket_cookie);
     return metadata != 0 ? *metadata : 0U;
-}
-
-INLINE bool socket_mark_bypassed(const struct __sk_buff *skb,
-    const struct sb_tc_control *control) {
-    return control->self_bypass_mark_mask != 0U &&
-        (skb->mark & control->self_bypass_mark_mask) == control->self_bypass_mark;
 }
 
 INLINE __u8 port_action(const struct sb_tc_control *control,
@@ -815,7 +807,6 @@ INLINE int local_egress_mark(struct __sk_buff *skb, bool ethernet, bool track_pr
     // self-bypass check.
     int parsed = parse_flow(skb, control, SB_TC_FLAG_LOCAL_IPV6, ethernet, false, &key, source_mac, &flags);
     if (parsed == SB_TC_PARSE_PASS) return TC_ACT_UNSPEC;
-    if (socket_mark_bypassed(skb, control)) return TC_ACT_UNSPEC;
     __u64 socket_cookie = get_socket_cookie(skb);
     __u32 socket_metadata_value = socket_metadata(socket_cookie);
     if ((socket_metadata_value & SB_EBPF_SOCKET_METADATA_SELF_BYPASS) != 0U) return TC_ACT_UNSPEC;

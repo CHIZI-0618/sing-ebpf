@@ -86,19 +86,11 @@ var loadTC = BPFGen.LoadTC
 
 var loadCgroup = BPFGen.LoadCgroup
 
-var loadCgroupNoMark = BPFGen.LoadCgroupNoMark
-
 var loadCgroupStorage = BPFGen.LoadCgroupStorage
-
-var loadCgroupStorageNoMark = BPFGen.LoadCgroupStorageNoMark
 
 var loadCgroupStorageCoarse = BPFGen.LoadCgroupStorageCoarse
 
-var loadCgroupStorageCoarseNoMark = BPFGen.LoadCgroupStorageCoarseNoMark
-
 var loadCgroupCoarse = BPFGen.LoadCgroupCoarse
-
-var loadCgroupCoarseNoMark = BPFGen.LoadCgroupCoarseNoMark
 
 var loadSharedNetwork = BPFGen.LoadSharedNetwork
 

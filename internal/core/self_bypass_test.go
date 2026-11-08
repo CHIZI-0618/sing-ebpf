@@ -93,7 +93,7 @@ func TestSelfBypassInstructionsUseSocketCookie(t *testing.T) {
 	}
 }
 
-func TestSelfBypassMarkingInstructionsCheckOwner(t *testing.T) {
+func TestSelfBypassInstructionsRecordOwner(t *testing.T) {
 	const owner = 4242
 	for name, instructions := range map[string]asm.Instructions{
 		"create":      selfBypassCreateInstructions(1, owner),
@@ -180,7 +180,6 @@ func TestSelfBypassModes(t *testing.T) {
 	}{
 		{SelfBypassUserspace, "userspace_socket_cookie", "userspace_unregister", false},
 		{SelfBypassCgroupSocket, "cgroup_socket_cookie", "socket_release", true},
-		{SelfBypassCgroupSocketAddr, "cgroup_socket_addr", "userspace_unregister", true},
 		{SelfBypassCgroupSocketAddrRelease, "cgroup_socket_addr_release", "socket_release", true},
 		{SelfBypassUserspaceRelease, "userspace_socket_cookie_release", "userspace_unregister", false},
 	}
@@ -264,10 +263,6 @@ func TestSelfBypassPreparedMapIsStable(t *testing.T) {
 // registered, in the same map the data plane later shares.
 func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	bypass := preparedTestSelfBypass(t)
-	// Exercise the legacy cookie-map path explicitly. The normal path uses
-	// SO_MARK when the kernel and security domain permit it, and therefore
-	// intentionally leaves this map empty.
-	bypass.disableSocketMark()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -311,55 +306,5 @@ func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	}
 	if err = bypass.UnregisterSocket(rawConn); err != nil {
 		t.Fatalf("userspace-release duplicate unregister failed: %v", err)
-	}
-}
-
-func TestSelfBypassRegisterSocketFallsBackWhenSocketMarkIsOccupied(t *testing.T) {
-	bypass := preparedTestSelfBypass(t)
-	if _, err := bypass.PreparedMap(); err != nil {
-		t.Skipf("BPF maps are unavailable here: %v", err)
-	}
-	bypass.socketMark = 0x55
-	bypass.socketMarkMask = selfBypassSocketMarkMask
-	bypass.socketMarkEnabled = true
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	rawConn, err := conn.(*net.UDPConn).SyscallConn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = control.Raw(rawConn, func(fd uintptr) error {
-		return unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, 1)
-	}); err != nil {
-		t.Skipf("socket marks are unavailable here: %v", err)
-	}
-	if err = bypass.RegisterSocket(rawConn); err != nil {
-		t.Fatal(err)
-	}
-	cookie, err := bypass.SocketCookie(rawConn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var value uint32
-	if err = bypass.sockets.Lookup(&cookie, &value); err != nil || value != 1 {
-		t.Fatalf("socket-mark fallback did not register cookie: value=%d err=%v", value, err)
-	}
-}
-
-func TestSelfBypassDoesNotAdvertiseSocketMarkWithoutCgroupHook(t *testing.T) {
-	bypass := &SelfBypass{
-		socketMark:        0x55,
-		socketMarkMask:    selfBypassSocketMarkMask,
-		socketMarkEnabled: true,
-	}
-	if _, _, enabled := bypass.SocketMarkConfig(); enabled {
-		t.Fatal("userspace self-bypass advertised SO_MARK without a cgroup hook")
-	}
-	bypass.mode.Store(uint32(SelfBypassCgroupSocket))
-	if _, _, enabled := bypass.SocketMarkConfig(); !enabled {
-		t.Fatal("cgroup self-bypass did not advertise the SO_MARK fast path")
 	}
 }

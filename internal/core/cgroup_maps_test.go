@@ -19,7 +19,7 @@ func TestCgroupSocketPeerStorageMapABI(t *testing.T) {
 }
 
 func TestCgroupNetworkGenerationABI(t *testing.T) {
-	if size := unsafe.Sizeof(cgroupControl{}); size != 40 {
+	if size := unsafe.Sizeof(cgroupControl{}); size != 32 {
 		t.Fatalf("unexpected cgroup control size: %d", size)
 	}
 	if offset := unsafe.Offsetof(cgroupControl{}.NetworkGeneration); offset != 4 {

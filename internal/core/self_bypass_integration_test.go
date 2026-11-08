@@ -19,11 +19,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// requireOwnerMarkingHelper skips where cgroup programs of programType cannot
+// requireOwnerMetadataHelper skips where cgroup programs of programType cannot
 // call bpf_get_current_pid_tgid, as on Linux 4.19 and 5.4. The
-// marking hooks then do not load and AttachCgroup keeps userspace
+// metadata hooks then do not load and AttachCgroup keeps userspace
 // registration, which TestSelfBypassFallsBackWhenHooksMarkNothing covers.
-func requireOwnerMarkingHelper(t *testing.T, programType CiliumEBPF.ProgramType) {
+func requireOwnerMetadataHelper(t *testing.T, programType CiliumEBPF.ProgramType) {
 	t.Helper()
 	if err := features.HaveProgramHelper(programType, asm.FnGetCurrentPidTgid); err != nil {
 		t.Skipf("%s programs cannot read the current thread group: %v", programType, err)
@@ -136,7 +136,7 @@ func moveTestProcessToCgroup(t *testing.T, path string) {
 	}
 }
 
-func selfBypassMarked(t *testing.T, bypass *SelfBypass, cookie uint64) bool {
+func selfBypassMetadataPresent(t *testing.T, bypass *SelfBypass, cookie uint64) bool {
 	t.Helper()
 	var metadata uint32
 	if err := bypass.sockets.Lookup(&cookie, &metadata); err != nil {
@@ -145,16 +145,16 @@ func selfBypassMarked(t *testing.T, bypass *SelfBypass, cookie uint64) bool {
 	return metadata&SocketMetadataSelfBypass != 0
 }
 
-// TestSelfBypassCgroupMarksOnlyOwnerProcess reproduces a consumer that owns
+// TestSelfBypassCgroupRecordsOnlyOwnerProcess reproduces a consumer that owns
 // an exclusive cgroup and later starts child processes there. The hooks must
 // keep excluding the consumer's own sockets while the children's sockets stay
-// unmarked, so local interception still applies to them.
-func TestSelfBypassCgroupMarksOnlyOwnerProcess(t *testing.T) {
+// unrecorded, so local interception still applies to them.
+func TestSelfBypassCgroupRecordsOnlyOwnerProcess(t *testing.T) {
 	requireEBPFIntegration(t, "attach self-bypass hooks to an exclusive process cgroup")
-	requireOwnerMarkingHelper(t, CiliumEBPF.CGroupSock)
-	requireOwnerMarkingHelper(t, CiliumEBPF.CGroupSockAddr)
+	requireOwnerMetadataHelper(t, CiliumEBPF.CGroupSock)
+	requireOwnerMetadataHelper(t, CiliumEBPF.CGroupSockAddr)
 	if _, err := selfBypassOwnerTGID(); err != nil {
-		t.Skipf("automatic self-bypass marking is unavailable: %v", err)
+		t.Skipf("automatic self-bypass cookie registration is unavailable: %v", err)
 	}
 	enterDedicatedSelfBypassCgroup(t, 300)
 
@@ -173,26 +173,26 @@ func TestSelfBypassCgroupMarksOnlyOwnerProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unix.Close(ownFD)
-	if !selfBypassMarked(t, bypass, ownCookie) {
-		t.Fatalf("socket of the owner process was not marked (mode %s)", bypass.Mode())
+	if !selfBypassMetadataPresent(t, bypass, ownCookie) {
+		t.Fatalf("socket of the owner process was not recorded (mode %s)", bypass.Mode())
 	}
 
 	helper := startSelfBypassTestHelper(t)
 	for _, connect := range []bool{false, true} {
-		if cookie := helper.cookie(t, connect); selfBypassMarked(t, bypass, cookie) {
-			t.Fatalf("socket of a child process in the owner cgroup was marked (mode %s, connect %v)", bypass.Mode(), connect)
+		if cookie := helper.cookie(t, connect); selfBypassMetadataPresent(t, bypass, cookie) {
+			t.Fatalf("socket of a child process in the owner cgroup was recorded (mode %s, connect %v)", bypass.Mode(), connect)
 		}
 	}
 }
 
-// TestSelfBypassSocketAddrHooksMarkOnlyOwnerProcess covers the connect/sendmsg
+// TestSelfBypassSocketAddrHooksRecordOnlyOwnerProcess covers the connect/sendmsg
 // fallback used on kernels without socket create/release hooks.
-func TestSelfBypassSocketAddrHooksMarkOnlyOwnerProcess(t *testing.T) {
+func TestSelfBypassSocketAddrHooksRecordOnlyOwnerProcess(t *testing.T) {
 	requireEBPFIntegration(t, "attach self-bypass socket-address hooks")
-	requireOwnerMarkingHelper(t, CiliumEBPF.CGroupSockAddr)
+	requireOwnerMetadataHelper(t, CiliumEBPF.CGroupSockAddr)
 	owner, err := selfBypassOwnerTGID()
 	if err != nil {
-		t.Skipf("automatic self-bypass marking is unavailable: %v", err)
+		t.Skipf("automatic self-bypass cookie registration is unavailable: %v", err)
 	}
 	path := enterDedicatedSelfBypassCgroup(t, 301)
 	bypass, err := NewSelfBypassWithCapacity(64)
@@ -210,13 +210,13 @@ func TestSelfBypassSocketAddrHooksMarkOnlyOwnerProcess(t *testing.T) {
 		if err = bypass.attachCgroupSocketAddr(path, config, owner); err != nil {
 			t.Fatalf("attach socket-address hooks %+v: %v", config, err)
 		}
-		if err = bypass.verifyOwnerMarking(true, config); err != nil {
-			t.Fatalf("socket-address hooks %+v did not mark the owner: %v", config, err)
+		if err = bypass.verifyOwnerMetadata(true, config); err != nil {
+			t.Fatalf("socket-address hooks %+v did not record the owner: %v", config, err)
 		}
 		helper := startSelfBypassTestHelper(t)
 		if config.EnableTCP {
-			if cookie := helper.cookie(t, true); selfBypassMarked(t, bypass, cookie) {
-				t.Fatalf("connect of a child process was marked with %+v", config)
+			if cookie := helper.cookie(t, true); selfBypassMetadataPresent(t, bypass, cookie) {
+				t.Fatalf("connect of a child process was recorded with %+v", config)
 			}
 		}
 		if err = bypass.closeHooks(); err != nil {
@@ -225,14 +225,14 @@ func TestSelfBypassSocketAddrHooksMarkOnlyOwnerProcess(t *testing.T) {
 	}
 }
 
-// TestSelfBypassFallsBackWhenHooksMarkNothing forces the owner check to
+// TestSelfBypassFallsBackWhenHooksRecordNothing forces the owner check to
 // reject this process. Hooks that would leave the consumer's own sockets
-// unmarked must be removed so that userspace registration takes over.
-func TestSelfBypassFallsBackWhenHooksMarkNothing(t *testing.T) {
+// unrecorded must be removed so that userspace registration takes over.
+func TestSelfBypassFallsBackWhenHooksRecordNothing(t *testing.T) {
 	requireEBPFIntegration(t, "verify the self-bypass probe fallback")
 	owner, err := selfBypassOwnerTGID()
 	if err != nil {
-		t.Skipf("automatic self-bypass marking is unavailable: %v", err)
+		t.Skipf("automatic self-bypass cookie registration is unavailable: %v", err)
 	}
 	enterDedicatedSelfBypassCgroup(t, 302)
 	previous := selfBypassOwner
@@ -246,7 +246,7 @@ func TestSelfBypassFallsBackWhenHooksMarkNothing(t *testing.T) {
 	defer bypass.Close()
 	attachErr := bypass.AttachCgroup(SelfBypassCgroupConfig{EnableTCP: true, EnableUDP: true})
 	// A successful release-only fallback returns no error, like any other
-	// unavailable marking path; the effective mode is the diagnostic.
+	// unavailable metadata path; the effective mode is the diagnostic.
 	if mode := bypass.Mode(); bypass.CgroupAttached() || (mode != SelfBypassUserspaceRelease && mode != SelfBypassUserspace) {
 		t.Fatalf("hooks that mark nothing were kept (mode %s): %v", mode, attachErr)
 	}
@@ -255,8 +255,8 @@ func TestSelfBypassFallsBackWhenHooksMarkNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unix.Close(fd)
-	if selfBypassMarked(t, bypass, cookie) {
-		t.Fatal("a removed hook still marked a socket")
+	if selfBypassMetadataPresent(t, bypass, cookie) {
+		t.Fatal("a removed hook still recorded a socket")
 	}
 }
 
