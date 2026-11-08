@@ -167,6 +167,16 @@ func (b *SelfBypass) SocketMarkConfig() (mark, mask uint32, enabled bool) {
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
+	// A marker is only a valid fast path when a cgroup hook is actually
+	// attached. On Android/vendor kernels the SO_MARK socket probe can succeed
+	// even though TC does not preserve that mark on the skb. In userspace
+	// fallback modes the cookie map is the correctness path; advertising the
+	// marker here would let every outbound socket skip cookie registration and
+	// be captured recursively by socket_assign.
+	mode := SelfBypassMode(b.mode.Load())
+	if mode == SelfBypassUserspace || mode == SelfBypassUserspaceRelease {
+		return b.socketMark, b.socketMarkMask, false
+	}
 	return b.socketMark, b.socketMarkMask, b.socketMarkEnabled
 }
 

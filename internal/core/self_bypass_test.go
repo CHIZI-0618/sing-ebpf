@@ -348,3 +348,18 @@ func TestSelfBypassRegisterSocketFallsBackWhenSocketMarkIsOccupied(t *testing.T)
 		t.Fatalf("socket-mark fallback did not register cookie: value=%d err=%v", value, err)
 	}
 }
+
+func TestSelfBypassDoesNotAdvertiseSocketMarkWithoutCgroupHook(t *testing.T) {
+	bypass := &SelfBypass{
+		socketMark:        0x55,
+		socketMarkMask:    selfBypassSocketMarkMask,
+		socketMarkEnabled: true,
+	}
+	if _, _, enabled := bypass.SocketMarkConfig(); enabled {
+		t.Fatal("userspace self-bypass advertised SO_MARK without a cgroup hook")
+	}
+	bypass.mode.Store(uint32(SelfBypassCgroupSocket))
+	if _, _, enabled := bypass.SocketMarkConfig(); !enabled {
+		t.Fatal("cgroup self-bypass did not advertise the SO_MARK fast path")
+	}
+}
