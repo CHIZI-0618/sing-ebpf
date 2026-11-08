@@ -96,6 +96,7 @@ const (
 	UDPRecoveryMapCapacity                   = core.UDPRecoveryMapCapacity
 	CompactSelfBypassSocketCapacity          = core.CompactSelfBypassSocketCapacity
 	CompactTCAssignmentCapacity              = core.CompactTCAssignmentCapacity
+	TCPolicyPortCapacity                     = core.TCPolicyPortCapacity
 	MaxConfigurableMapCapacity               = core.MaxConfigurableMapCapacity
 	MapCategoryRuntime                       = core.MapCategoryRuntime
 	MapCategoryConfiguredPolicy              = core.MapCategoryConfiguredPolicy

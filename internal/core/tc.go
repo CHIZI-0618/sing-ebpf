@@ -31,7 +31,10 @@ const (
 	// device. Platform-specific compact capacity is selected by sing-box.
 	tcAssignmentCapacity        = 32768
 	CompactTCAssignmentCapacity = 8192
-	tcPortPolicyCapacity        = 4096
+	// TCPolicyPortCapacity bounds the expanded per-protocol destination-port
+	// policy maps. Keep this public so integrations can reject oversized
+	// port ranges before backend creation reports a low-level map error.
+	TCPolicyPortCapacity = 4096
 )
 
 const (

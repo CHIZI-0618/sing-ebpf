@@ -313,3 +313,38 @@ func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 		t.Fatalf("userspace-release duplicate unregister failed: %v", err)
 	}
 }
+
+func TestSelfBypassRegisterSocketFallsBackWhenSocketMarkIsOccupied(t *testing.T) {
+	bypass := preparedTestSelfBypass(t)
+	if _, err := bypass.PreparedMap(); err != nil {
+		t.Skipf("BPF maps are unavailable here: %v", err)
+	}
+	bypass.socketMark = 0x55
+	bypass.socketMarkMask = selfBypassSocketMarkMask
+	bypass.socketMarkEnabled = true
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	rawConn, err := conn.(*net.UDPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = control.Raw(rawConn, func(fd uintptr) error {
+		return unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, 1)
+	}); err != nil {
+		t.Skipf("socket marks are unavailable here: %v", err)
+	}
+	if err = bypass.RegisterSocket(rawConn); err != nil {
+		t.Fatal(err)
+	}
+	cookie, err := bypass.SocketCookie(rawConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value uint32
+	if err = bypass.sockets.Lookup(&cookie, &value); err != nil || value != 1 {
+		t.Fatalf("socket-mark fallback did not register cookie: value=%d err=%v", value, err)
+	}
+}

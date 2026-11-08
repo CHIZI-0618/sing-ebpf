@@ -692,13 +692,26 @@ func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, erro
 // cannot mark it automatically. It performs one SO_COOKIE read and one map
 // update per socket.
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
+	if b == nil {
+		return nil
+	}
+	_, _, markEnabled := b.SocketMarkConfig()
 	if marked, err := b.ApplySocketMark(rawConn); marked {
 		return nil
-	} else if err != nil {
+	} else if err != nil && !markEnabled {
 		// SO_MARK is an optimization. Continue with the bounded cookie-map
 		// fallback when the socket or its security domain rejects it.
 	}
 	mode := b.Mode()
+	// A successful probe only establishes that this process can mark the
+	// probe socket. A later socket may reject SO_MARK or already carry another
+	// value in the reserved bits. If the mark fast path was selected, register
+	// that individual socket in the cookie map instead of silently allowing it
+	// to be captured.
+	if markEnabled {
+		_, err := b.RegisterSocketCookie(rawConn)
+		return err
+	}
 	if mode != SelfBypassUserspace && mode != SelfBypassUserspaceRelease {
 		// Cgroup marking modes already cover this socket. Do not grow the
 		// fallback map merely because SO_MARK was unavailable on one socket.
