@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -528,12 +529,29 @@ func selfBypassSocketAddrInstructions(mapFD int, ownerTGID uint32) asm.Instructi
 	)
 }
 
-// RegisterSocket records a socket created by the consumer when cgroup hooks
-// cannot mark it automatically. It performs one SO_COOKIE read and one map
-// update per socket.
-func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
+// SocketCookie returns the stable kernel cookie of a live socket.
+func (b *SelfBypass) SocketCookie(rawConn syscall.RawConn) (uint64, error) {
+	var cookie uint64
+	err := control.Raw(rawConn, func(fd uintptr) error {
+		var err error
+		cookie, err = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if cookie == 0 {
+		return 0, E.New("socket returned an empty eBPF self-bypass cookie")
+	}
+	return cookie, nil
+}
+
+// RegisterSocketCookie records a socket and returns its cookie. The cookie can
+// be retained by a dial attempt and removed after a failed connect, when the
+// original file descriptor has already been closed by net.Dialer.
+func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, error) {
 	if b == nil {
-		return nil
+		return 0, nil
 	}
 	b.access.RLock()
 	if b.sockets == nil && !b.closed {
@@ -542,31 +560,31 @@ func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 		// a failure fails the socket rather than leaving it unregistered.
 		b.access.RUnlock()
 		if _, err := b.PreparedMap(); err != nil && !errors.Is(err, errSelfBypassClosed) {
-			return err
+			return 0, err
 		}
 		b.access.RLock()
 	}
 	defer b.access.RUnlock()
 	if b.sockets == nil {
-		return nil
+		return 0, nil
 	}
-	var cookie uint64
-	err := control.Raw(rawConn, func(fd uintptr) error {
-		var err error
-		cookie, err = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
-		return err
-	})
+	cookie, err := b.SocketCookie(rawConn)
 	if err != nil {
-		return E.Cause(err, "read socket cookie for eBPF self-bypass")
-	}
-	if cookie == 0 {
-		return E.New("socket returned an empty eBPF self-bypass cookie")
+		return 0, E.Cause(err, "read socket cookie for eBPF self-bypass")
 	}
 	value := uint32(1)
 	if err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny); err != nil {
-		return E.Cause(err, "register eBPF self-bypass socket")
+		return 0, E.Cause(err, "register eBPF self-bypass socket")
 	}
-	return nil
+	return cookie, nil
+}
+
+// RegisterSocket records a socket created by the consumer when cgroup hooks
+// cannot mark it automatically. It performs one SO_COOKIE read and one map
+// update per socket.
+func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
+	_, err := b.RegisterSocketCookie(rawConn)
+	return err
 }
 
 // UnregisterSocket removes a socket previously registered by RegisterSocket.
@@ -578,24 +596,25 @@ func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
 	if b == nil {
 		return nil
 	}
+	cookie, err := b.SocketCookie(rawConn)
+	if err != nil {
+		return E.Cause(err, "read socket cookie for eBPF self-bypass unregister")
+	}
+	return b.UnregisterCookie(cookie)
+}
+
+// UnregisterCookie removes a previously registered socket by its stable
+// kernel cookie. It is safe to call after the file descriptor has closed.
+func (b *SelfBypass) UnregisterCookie(cookie uint64) error {
+	if b == nil || cookie == 0 {
+		return nil
+	}
 	b.access.RLock()
 	defer b.access.RUnlock()
 	if b.sockets == nil {
 		return nil
 	}
-	var cookie uint64
-	err := control.Raw(rawConn, func(fd uintptr) error {
-		var err error
-		cookie, err = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
-		return err
-	})
-	if err != nil {
-		return E.Cause(err, "read socket cookie for eBPF self-bypass unregister")
-	}
-	if cookie == 0 {
-		return nil
-	}
-	if err = b.sockets.Delete(&cookie); err != nil {
+	if err := b.sockets.Delete(&cookie); err != nil {
 		if errors.Is(err, CiliumEBPF.ErrKeyNotExist) || errors.Is(err, unix.ENOENT) {
 			return nil
 		}
@@ -603,11 +622,6 @@ func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
 	}
 	return nil
 }
-
-// initialPIDNamespaceLink is the /proc/<pid>/ns/pid link of the initial PID
-// namespace (PROC_PID_INIT_INO). bpf_get_current_pid_tgid reports ids in that
-// namespace only.
-const initialPIDNamespaceLink = "pid:[4026531836]"
 
 // selfBypassProbePort is the discard port used by the socket-address probe.
 // The probe only connects a UDP socket or sends an empty datagram to loopback.
@@ -618,17 +632,29 @@ const selfBypassProbePort = 9
 var selfBypassOwner = selfBypassOwnerTGID
 
 // selfBypassOwnerTGID returns the thread-group id the marking hooks compare
-// against. It fails outside the initial PID namespace, where os.Getpid does not
-// match the id the kernel helper reports, so automatic marking is not used.
+// against. bpf_get_current_pid_tgid returns the kernel (initial namespace) TGID.
+// NSpid exposes that same value when the process is in a nested PID namespace;
+// kernels without PID namespace support omit the field and use os.Getpid().
+// This avoids depending on /proc/*/ns/pid, which Android kernels may omit even
+// for a process that can otherwise use cgroup BPF.
 func selfBypassOwnerTGID() (uint32, error) {
-	namespace, err := os.Readlink("/proc/self/ns/pid")
-	if err != nil {
-		return 0, E.Cause(err, "read process PID namespace")
-	}
-	if namespace != initialPIDNamespaceLink {
-		return 0, E.New("process is not in the initial PID namespace: ", namespace)
-	}
 	pid := os.Getpid()
+	if status, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if !strings.HasPrefix(line, "NSpid:") {
+				continue
+			}
+			fields := strings.Fields(line[len("NSpid:"):])
+			if len(fields) > 0 {
+				parsed, parseErr := strconv.Atoi(fields[len(fields)-1])
+				if parseErr != nil {
+					return 0, E.Cause(parseErr, "parse process kernel TGID")
+				}
+				pid = parsed
+			}
+			break
+		}
+	}
 	if pid <= 0 || pid > math.MaxInt32 {
 		return 0, E.New("process id out of range: ", pid)
 	}

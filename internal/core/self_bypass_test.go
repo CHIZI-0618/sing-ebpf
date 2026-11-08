@@ -138,17 +138,7 @@ func TestSelfBypassMarkingInstructionsCheckOwner(t *testing.T) {
 }
 
 func TestSelfBypassOwnerTGID(t *testing.T) {
-	namespace, err := os.Readlink("/proc/self/ns/pid")
-	if err != nil {
-		t.Skipf("PID namespace is not readable: %v", err)
-	}
 	owner, err := selfBypassOwnerTGID()
-	if namespace != initialPIDNamespaceLink {
-		if err == nil {
-			t.Fatalf("owner %d accepted outside the initial PID namespace (%s)", owner, namespace)
-		}
-		return
-	}
 	if err != nil || owner != uint32(os.Getpid()) {
 		t.Fatalf("owner = %d, %v; want %d", owner, err, os.Getpid())
 	}
