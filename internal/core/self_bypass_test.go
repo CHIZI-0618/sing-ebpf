@@ -264,6 +264,10 @@ func TestSelfBypassPreparedMapIsStable(t *testing.T) {
 // registered, in the same map the data plane later shares.
 func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	bypass := preparedTestSelfBypass(t)
+	// Exercise the legacy cookie-map path explicitly. The normal path uses
+	// SO_MARK when the kernel and security domain permit it, and therefore
+	// intentionally leaves this map empty.
+	bypass.disableSocketMark()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
