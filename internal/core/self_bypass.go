@@ -211,6 +211,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	}
 	cgroupPath, err := DetectProcessCgroup2Path()
 	if err != nil {
+		b.fallbackReason = "cgroup_path_unavailable"
 		return E.Cause(err, "detect process cgroup v2")
 	}
 	exclusive, exclusiveErr := processCgroupExclusive(cgroupPath)
@@ -281,6 +282,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		b.fallbackReason = "cgroup_socket_hooks_unavailable"
 		return nil
 	} else {
+		b.fallbackReason = "cgroup_hooks_unavailable"
 		attachErrors = append(attachErrors, releaseErr)
 	}
 	return E.Errors(attachErrors...)
