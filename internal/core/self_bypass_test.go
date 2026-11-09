@@ -6,10 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 
 	CiliumEBPF "github.com/cilium/ebpf"
@@ -242,6 +244,89 @@ func preparedTestSelfBypass(t *testing.T) *SelfBypass {
 	}
 	t.Cleanup(func() { _ = bypass.Close() })
 	return bypass
+}
+
+func testSocketCookie(t *testing.T) (net.PacketConn, syscall.RawConn, uint64) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawConn, err := conn.(*net.UDPConn).SyscallConn()
+	if err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	var cookie uint64
+	if err = control.Raw(rawConn, func(fd uintptr) error {
+		cookie, err = unix.GetsockoptUint64(int(fd), unix.SOL_SOCKET, unix.SO_COOKIE)
+		return err
+	}); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	return conn, rawConn, cookie
+}
+
+func TestOpenSocketCookiesTracksDescriptors(t *testing.T) {
+	conn, _, cookie := testSocketCookie(t)
+	open, err := openSocketCookies()
+	if err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	if _, loaded := open[cookie]; !loaded {
+		_ = conn.Close()
+		t.Fatal("open socket missing from descriptor scan")
+	}
+	_ = conn.Close()
+	open, err = openSocketCookies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded := open[cookie]; loaded {
+		t.Fatal("closed socket still reported open")
+	}
+}
+
+func TestSelfBypassReclaimsClosedSocketsWhenFull(t *testing.T) {
+	bypass, err := NewSelfBypassWithCapacity(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bypass.Close() })
+	sockets, err := bypass.PreparedMap()
+	if err != nil {
+		t.Skipf("BPF maps are unavailable here: %v", err)
+	}
+	live, liveRaw, liveCookie := testSocketCookie(t)
+	defer live.Close()
+	closed, closedRaw, closedCookie := testSocketCookie(t)
+	for _, rawConn := range []syscall.RawConn{liveRaw, closedRaw} {
+		if _, err = bypass.RegisterSocketCookie(rawConn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = closed.Close()
+	policyCookie := uint64(math.MaxUint64)
+	policyValue := uint32(SocketMetadataPolicyBypass)
+	if err = sockets.Update(&policyCookie, &policyValue, CiliumEBPF.UpdateAny); err != nil {
+		t.Fatal(err)
+	}
+	next, nextRaw, nextCookie := testSocketCookie(t)
+	defer next.Close()
+	if _, err = bypass.RegisterSocketCookie(nextRaw); err != nil {
+		t.Fatalf("register into a map full of closed sockets: %v", err)
+	}
+	var value uint32
+	for _, cookie := range []uint64{liveCookie, nextCookie, policyCookie} {
+		if err = sockets.Lookup(&cookie, &value); err != nil {
+			t.Fatalf("entry %d was removed: %v", cookie, err)
+		}
+	}
+	if err = sockets.Lookup(&closedCookie, &value); !errors.Is(err, CiliumEBPF.ErrKeyNotExist) {
+		t.Fatalf("closed socket entry was kept: %v", err)
+	}
 }
 
 func TestSelfBypassPreparedMapIsStable(t *testing.T) {

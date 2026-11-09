@@ -573,10 +573,67 @@ func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, erro
 		return 0, E.Cause(err, "read socket cookie for eBPF self-bypass")
 	}
 	value := uint32(1)
-	if err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny); err != nil {
+	err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny)
+	if errors.Is(err, unix.E2BIG) && b.reclaimClosedSockets() > 0 {
+		err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny)
+	}
+	if err != nil {
 		return 0, E.Cause(err, "register eBPF self-bypass socket")
 	}
 	return cookie, nil
+}
+
+// reclaimClosedSockets removes self-bypass entries whose socket is no longer
+// open in this process. It runs only after a map-full update failure, so the
+// normal registration path remains one cookie read and one map update.
+// Process-tracker policy entries are deliberately left untouched.
+func (b *SelfBypass) reclaimClosedSockets() int {
+	var (
+		cookie    uint64
+		metadata  uint32
+		candidate []uint64
+	)
+	entries := b.sockets.Iterate()
+	for entries.Next(&cookie, &metadata) {
+		if metadata&SocketMetadataSelfBypass != 0 {
+			candidate = append(candidate, cookie)
+		}
+	}
+	if entries.Err() != nil || len(candidate) == 0 {
+		return 0
+	}
+	open, err := openSocketCookies()
+	if err != nil {
+		return 0
+	}
+	var reclaimed int
+	for _, cookie := range candidate {
+		if _, loaded := open[cookie]; !loaded && b.sockets.Delete(&cookie) == nil {
+			reclaimed++
+		}
+	}
+	return reclaimed
+}
+
+// openSocketCookies returns cookies for all sockets currently open in this
+// process. A descriptor reused during the scan can only add a live cookie,
+// which is safe to retain.
+func openSocketCookies() (map[uint64]struct{}, error) {
+	descriptors, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return nil, err
+	}
+	open := make(map[uint64]struct{}, len(descriptors))
+	for _, descriptor := range descriptors {
+		fd, err := strconv.Atoi(descriptor.Name())
+		if err != nil {
+			continue
+		}
+		if cookie, err := unix.GetsockoptUint64(fd, unix.SOL_SOCKET, unix.SO_COOKIE); err == nil && cookie != 0 {
+			open[cookie] = struct{}{}
+		}
+	}
+	return open, nil
 }
 
 // RegisterSocket records a socket created by the consumer when cgroup hooks
