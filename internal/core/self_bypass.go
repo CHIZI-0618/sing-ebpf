@@ -43,13 +43,14 @@ const (
 // Every path that needs the map creates it first: data-plane preparation
 // (through PreparedMap), cgroup attachment, and socket registration.
 type SelfBypass struct {
-	access   sync.RWMutex
-	capacity uint32
-	sockets  *CiliumEBPF.Map
-	closed   bool
-	programs []*CiliumEBPF.Program
-	links    []cgroupProgramLink
-	mode     atomic.Uint32
+	access         sync.RWMutex
+	capacity       uint32
+	sockets        *CiliumEBPF.Map
+	closed         bool
+	programs       []*CiliumEBPF.Program
+	links          []cgroupProgramLink
+	mode           atomic.Uint32
+	fallbackReason string
 }
 
 type SelfBypassCgroupConfig struct {
@@ -72,12 +73,17 @@ const (
 	// when socket-create/connect hooks are unavailable, including TC-only
 	// deployments where the cgroup data plane is not loaded.
 	SelfBypassUserspaceRelease
+	// SelfBypassCgroupSocketAddr uses connect/sendmsg hooks and userspace
+	// cookie cleanup when the kernel has no usable sock_release hook.
+	SelfBypassCgroupSocketAddr
 )
 
 func (m SelfBypassMode) String() string {
 	switch m {
 	case SelfBypassCgroupSocket:
 		return "cgroup_socket_cookie"
+	case SelfBypassCgroupSocketAddr:
+		return "cgroup_socket_addr"
 	case SelfBypassCgroupSocketAddrRelease:
 		return "cgroup_socket_addr_release"
 	case SelfBypassUserspaceRelease:
@@ -197,6 +203,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	if b.mode.Load() != uint32(SelfBypassUserspace) {
 		return nil
 	}
+	b.fallbackReason = ""
 	if lenOpenCgroupProgramLinks(b.links) > 0 {
 		if err := b.closeHooks(); err != nil {
 			return E.Cause(err, "finish previous eBPF self-bypass cleanup")
@@ -246,14 +253,12 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 					b.mode.Store(uint32(SelfBypassCgroupSocketAddrRelease))
 					return nil
 				}
-				// Address hooks create entries in the shared ownership map. Do not
-				// keep them without a release hook: the map is intentionally a
-				// non-evicting hash, so falling back to userspace registration is
-				// safer than leaking entries or silently recapturing sockets.
-				if closeErr := b.closeHooks(); closeErr != nil {
-					return E.Errors(socketAddrErr, closeErr)
-				}
-				socketAddrErr = E.New("eBPF self-bypass socket-address hooks require socket-release cleanup")
+				// Keep the address hooks active and pair them with userspace cookie
+				// registration. The registration wrapper provides exact cleanup;
+				// closed-entry reclamation remains the last-resort safety net.
+				b.fallbackReason = "socket_release_unavailable"
+				b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
+				return nil
 			}
 			if closeErr := b.closeHooks(); closeErr != nil {
 				return E.Errors(socketAddrErr, closeErr)
@@ -273,6 +278,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	// multi-program/link hook afterwards.
 	if releaseErr := b.attachCgroupRelease(cgroupPath, true); releaseErr == nil {
 		b.mode.Store(uint32(SelfBypassUserspaceRelease))
+		b.fallbackReason = "cgroup_socket_hooks_unavailable"
 		return nil
 	} else {
 		attachErrors = append(attachErrors, releaseErr)
@@ -285,7 +291,7 @@ func (b *SelfBypass) CgroupAttached() bool {
 		return false
 	}
 	mode := SelfBypassMode(b.mode.Load())
-	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddrRelease
+	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddr || mode == SelfBypassCgroupSocketAddrRelease
 }
 
 func (b *SelfBypass) Mode() SelfBypassMode {
@@ -293,6 +299,17 @@ func (b *SelfBypass) Mode() SelfBypassMode {
 		return SelfBypassUserspace
 	}
 	return SelfBypassMode(b.mode.Load())
+}
+
+// FallbackReason reports why the selected self-bypass mode fell back from a
+// stronger cgroup hook set. It is empty when the socket-create mode is active.
+func (b *SelfBypass) FallbackReason() string {
+	if b == nil {
+		return ""
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	return b.fallbackReason
 }
 
 func (b *SelfBypass) attachCgroupSocket(path string, ownerTGID uint32) error {
@@ -644,7 +661,7 @@ func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
 		return nil
 	}
 	mode := b.Mode()
-	if mode != SelfBypassUserspace && mode != SelfBypassUserspaceRelease {
+	if mode != SelfBypassUserspace && mode != SelfBypassCgroupSocketAddr && mode != SelfBypassUserspaceRelease {
 		// Cgroup hooks already cover this socket. Do not grow the fallback map.
 		return nil
 	}

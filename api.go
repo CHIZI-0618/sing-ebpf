@@ -111,6 +111,7 @@ const (
 
 	SelfBypassUserspace        = core.SelfBypassUserspace
 	SelfBypassCgroupSocket     = core.SelfBypassCgroupSocket
+	SelfBypassCgroupSocketAddr = core.SelfBypassCgroupSocketAddr
 	SelfBypassUserspaceRelease = core.SelfBypassUserspaceRelease
 
 	KernelProbeModeAll    = core.KernelProbeModeAll
@@ -178,6 +179,13 @@ func (b *SelfBypass) CleanupMode() string {
 		return SelfBypassUserspace.CleanupMode()
 	}
 	return core.UnwrapSelfBypass(b).Mode().CleanupMode()
+}
+
+func (b *SelfBypass) FallbackReason() string {
+	if b == nil {
+		return ""
+	}
+	return core.UnwrapSelfBypass(b).FallbackReason()
 }
 
 func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
