@@ -267,25 +267,26 @@ cgroup attachment, or the first socket registration. Data planes obtain it
 through `PreparedMap`, so a creation failure stops startup instead of leaving
 the data plane with a private map that never sees registered sockets.
 
-The interception cgroup is independent of an optional exclusive process cgroup
-used for self-bypass. A broad interception cgroup still excludes consumer-owned
-sockets through the shared cookie map. Userspace socket controls remain the
-fallback when process cgroup hooks cannot maintain that map. On kernels that
-support `BPF_MAP_TYPE_SK_STORAGE` and its cgroup helpers, the exclusive cgroup
-path also records the self-bypass bit in socket-local storage. The cookie map is
-still maintained as the TC visibility bridge, while storage is reclaimed by the
-kernel with the socket. If storage or its verifier path is unavailable, the
-same TGID/address-hook chain falls back to the cookie map without changing the
-consumer API.
+The interception cgroup is independent of an optional process cgroup used by
+the cookie bridge. A local cgroup data plane first loads a direct-TGID object:
+its connect/sendmsg programs compare the current TGID and bypass the consumer
+without publishing per-socket state. The generated legacy object does not
+reference that helper; a missing helper or rejected direct object therefore
+falls back to the existing cookie producer chain without raising the minimum
+kernel requirement. Local TC continues to use the cookie bridge because a TC
+packet does not carry reliable process identity. Userspace socket controls are
+the final producer fallback when process cgroup hooks cannot maintain the map.
 
-Self-bypass diagnostics keep ownership and cleanup independent. `cgroup_tgid`
-and `cgroup_addr` identify kernel ownership hooks; `sk_storage` and
-`cookie_hash` identify the metadata backend; `sk_storage`, `socket_release`, or
-`userspace_unregister` identify the primary cleanup path; and
-`proc_fd_reclaim` identifies the bounded last-resort userspace reclamation.
-Attachment diagnostics separately report `bpf_link`, `legacy_attach`, or
-`mixed`. Capability and verifier failures select the next fallback rather than
-raising the minimum supported kernel version.
+Self-bypass diagnostics model decision, producer, visibility, cleanup, reclaim,
+and attachment independently. A direct local-cgroup path reports
+`direct_tgid`, `none`, `direct_tgid`, `none`, `none`, and `none`. Cookie paths
+report `cgroup_tgid` or `userspace_control` as the decision,
+`cgroup_sock_create`, `cgroup_addr`, or `userspace_control` as the producer,
+`cookie_hash` as visibility, and `socket_release` or `userspace_unregister` as
+cleanup. `proc_fd_reclaim` is reported only as bounded map-full recovery, with
+attempt, reclaimed-entry, failure, and last-run counters. Attachment diagnostics
+separately report `bpf_link`, `legacy_attach`, or `mixed`. The registration token
+returned to consumers ties cleanup to the socket that was actually published.
 
 ## Socket assignment
 
