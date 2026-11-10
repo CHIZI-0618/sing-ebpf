@@ -52,6 +52,7 @@ type SelfBypass struct {
 	programs          []*CiliumEBPF.Program
 	links             []cgroupProgramLink
 	mode              atomic.Uint32
+	lifecycle         atomic.Uint32
 	decisionBackend   string
 	producerBackend   string
 	visibilityBackend string
@@ -75,6 +76,12 @@ type SelfBypassCgroupConfig struct {
 }
 
 type SelfBypassMode uint32
+
+const (
+	selfBypassLifecycleConfigured = 1 << iota
+	selfBypassLifecycleRegistration
+	selfBypassLifecycleUnregister
+)
 
 const (
 	SelfBypassUserspace SelfBypassMode = iota
@@ -281,6 +288,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 			b.cleanupBackend = selfBypassCleanupNone
 			b.reclaimBackend = "none"
 			b.attachmentBackend = "none"
+			b.setLifecycleNeeds(false, false)
 			b.mode.Store(uint32(SelfBypassDirectTGID))
 			return nil
 		}
@@ -389,6 +397,18 @@ func (b *SelfBypass) setPathDiagnostics(decision, producer, cleanup string) {
 		b.reclaimBackend = "none"
 	}
 	b.attachmentBackend = b.currentAttachmentBackend()
+	b.setLifecycleNeeds(producer == selfBypassProducerUserspace, cleanup == selfBypassCleanupUserspace)
+}
+
+func (b *SelfBypass) setLifecycleNeeds(registration, unregister bool) {
+	state := uint32(selfBypassLifecycleConfigured)
+	if registration {
+		state |= selfBypassLifecycleRegistration
+	}
+	if unregister {
+		state |= selfBypassLifecycleUnregister
+	}
+	b.lifecycle.Store(state)
 }
 
 func (b *SelfBypass) currentAttachmentBackend() string {
@@ -467,13 +487,21 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 // NeedsUserspaceRegistration reports whether socket controls must publish
 // socket cookies into the shared visibility map.
 func (b *SelfBypass) NeedsUserspaceRegistration() bool {
-	return b.Diagnostics().ProducerBackend == selfBypassProducerUserspace
+	if b == nil {
+		return false
+	}
+	state := b.lifecycle.Load()
+	return state == 0 || state&selfBypassLifecycleRegistration != 0
 }
 
 // NeedsUserspaceUnregister reports whether the userspace owner must release
 // registrations before closing their sockets.
 func (b *SelfBypass) NeedsUserspaceUnregister() bool {
-	return b.Diagnostics().CleanupBackend == selfBypassCleanupUserspace
+	if b == nil {
+		return false
+	}
+	state := b.lifecycle.Load()
+	return state == 0 || state&selfBypassLifecycleUnregister != 0
 }
 
 // CleanupBackend reports the primary kernel/userspace cleanup path.
@@ -526,6 +554,7 @@ func (b *SelfBypass) fallbackDirectCgroup() error {
 	b.cleanupBackend = ""
 	b.reclaimBackend = ""
 	b.attachmentBackend = "none"
+	b.setLifecycleNeeds(true, true)
 	b.fallbackReason = "direct_tgid_program_load_failed"
 	b.access.Unlock()
 	err := b.AttachCgroup(config)
