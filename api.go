@@ -42,6 +42,7 @@ type (
 	TCDiagnostics                  = core.TCDiagnostics
 	SelfBypassCgroupConfig         = core.SelfBypassCgroupConfig
 	SelfBypassMode                 = core.SelfBypassMode
+	SelfBypassDiagnostics          = core.SelfBypassDiagnostics
 	ProcessSocketOwner             = core.ProcessSocketOwner
 	ProcessTracker                 = core.ProcessTracker
 	LocalRouteSet                  = core.LocalRouteSet
@@ -111,6 +112,7 @@ const (
 
 	SelfBypassUserspace        = core.SelfBypassUserspace
 	SelfBypassCgroupSocket     = core.SelfBypassCgroupSocket
+	SelfBypassCgroupSocketAddrRelease = core.SelfBypassCgroupSocketAddrRelease
 	SelfBypassCgroupSocketAddr = core.SelfBypassCgroupSocketAddr
 	SelfBypassUserspaceRelease = core.SelfBypassUserspaceRelease
 
@@ -179,6 +181,36 @@ func (b *SelfBypass) CleanupMode() string {
 		return SelfBypassUserspace.CleanupMode()
 	}
 	return core.UnwrapSelfBypass(b).Mode().CleanupMode()
+}
+
+// Diagnostics reports the actual ownership, metadata, cleanup and attachment
+// backends selected after capability probing and verifier fallback.
+func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
+	if b == nil {
+		return core.SelfBypassDiagnostics{}
+	}
+	return core.UnwrapSelfBypass(b).Diagnostics()
+}
+
+func (b *SelfBypass) OwnershipBackend() string {
+	if b == nil {
+		return "cookie_hash"
+	}
+	return core.UnwrapSelfBypass(b).OwnershipBackend()
+}
+
+func (b *SelfBypass) MetadataBackend() string {
+	if b == nil {
+		return "cookie_hash"
+	}
+	return core.UnwrapSelfBypass(b).MetadataBackend()
+}
+
+func (b *SelfBypass) CleanupBackend() string {
+	if b == nil {
+		return "userspace_unregister"
+	}
+	return core.UnwrapSelfBypass(b).CleanupBackend()
 }
 
 func (b *SelfBypass) FallbackReason() string {

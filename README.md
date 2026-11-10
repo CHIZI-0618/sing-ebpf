@@ -270,7 +270,22 @@ the data plane with a private map that never sees registered sockets.
 The interception cgroup is independent of an optional exclusive process cgroup
 used for self-bypass. A broad interception cgroup still excludes consumer-owned
 sockets through the shared cookie map. Userspace socket controls remain the
-fallback when process cgroup hooks cannot maintain that map.
+fallback when process cgroup hooks cannot maintain that map. On kernels that
+support `BPF_MAP_TYPE_SK_STORAGE` and its cgroup helpers, the exclusive cgroup
+path also records the self-bypass bit in socket-local storage. The cookie map is
+still maintained as the TC visibility bridge, while storage is reclaimed by the
+kernel with the socket. If storage or its verifier path is unavailable, the
+same TGID/address-hook chain falls back to the cookie map without changing the
+consumer API.
+
+Self-bypass diagnostics keep ownership and cleanup independent. `cgroup_tgid`
+and `cgroup_addr` identify kernel ownership hooks; `sk_storage` and
+`cookie_hash` identify the metadata backend; `sk_storage`, `socket_release`, or
+`userspace_unregister` identify the primary cleanup path; and
+`proc_fd_reclaim` identifies the bounded last-resort userspace reclamation.
+Attachment diagnostics separately report `bpf_link`, `legacy_attach`, or
+`mixed`. Capability and verifier failures select the next fallback rather than
+raising the minimum supported kernel version.
 
 ## Socket assignment
 
@@ -412,7 +427,7 @@ same interface.
 | Group | Map types | Purpose |
 | --- | --- | --- |
 | control | `ARRAY` | Enable state, path flags, listener port, and delivery interface identity. |
-| sockets and assignments | `SOCKMAP` (optional), `LRU_HASH` | Preferred TCP listener fallback, original-flow metadata, and local self-bypass cookies. Legacy TCP lookup does not use SOCKMAP. |
+| sockets and assignments | `SOCKMAP` (optional), `LRU_HASH`, `SK_STORAGE` (optional) | Preferred TCP listener fallback, original-flow metadata, local self-bypass cookies, and socket-local self-bypass lifetime state. Legacy TCP lookup does not use SOCKMAP; `SK_STORAGE` is capability-selected and has no fixed occupancy limit. |
 | local cgroup UDP state | `HASH`/`LRU_HASH`, `LRU_HASH` | Redirect/token maps use preallocated `HASH` with socket-release cleanup, or bounded `LRU_HASH` without it; peer state follows the same capability and flow state is always bounded. |
 | prefix policy | `LPM_TRIE` | UID ranges, source CIDRs, and destination bypass CIDRs. |
 | exact policy | `HASH` | Host addresses and shared source MAC policy. |

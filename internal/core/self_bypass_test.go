@@ -13,12 +13,29 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	"github.com/sagernet/sing/common/control"
 	"golang.org/x/sys/unix"
 )
+
+func TestSelfBypassStorageMapABI(t *testing.T) {
+	spec := selfBypassStorageMapSpec()
+	if spec.Name != "sb_self_storage" || spec.Type != CiliumEBPF.SkStorage || spec.KeySize != 4 || spec.ValueSize != 4 || spec.MaxEntries != 0 || spec.Flags&bpfFlagNoPrealloc == 0 {
+		t.Fatalf("unexpected self-bypass storage map spec: %+v", spec)
+	}
+	if got := spec.Key.TypeName(); got != "int" {
+		t.Fatalf("self-bypass storage key BTF type = %q, want int", got)
+	}
+	if got := spec.Value.TypeName(); got != "__u32" {
+		t.Fatalf("self-bypass storage value BTF type = %q, want __u32", got)
+	}
+	if unsafe.Sizeof(uint32(0)) != 4 {
+		t.Fatal("unexpected uint32 ABI")
+	}
+}
 
 func TestProcessCgroupExclusive(t *testing.T) {
 	directory := t.TempDir()
@@ -92,6 +109,52 @@ func TestSelfBypassInstructionsUseSocketCookie(t *testing.T) {
 		if !found {
 			t.Fatalf("%s self-bypass instructions do not read the socket cookie", name)
 		}
+	}
+}
+
+func TestSelfBypassStorageInstructionsUseStorageHelpers(t *testing.T) {
+	for name, instructions := range map[string]asm.Instructions{
+		"create":      selfBypassCreateInstructions(1, 1, 2),
+		"release":     selfBypassReleaseInstructions(1, 2),
+		"socket_addr": selfBypassSocketAddrInstructions(1, 1, 2),
+	} {
+		var get, delete int
+		for _, instruction := range instructions {
+			if !instruction.IsBuiltinCall() {
+				continue
+			}
+			switch asm.BuiltinFunc(instruction.Constant) {
+			case asm.FnSkStorageGet:
+				get++
+			case asm.FnSkStorageDelete:
+				delete++
+			}
+		}
+		if name == "release" && delete != 1 {
+			t.Fatalf("%s storage delete calls = %d, want 1", name, delete)
+		}
+		if name != "release" && get != 1 {
+			t.Fatalf("%s storage get calls = %d, want 1", name, get)
+		}
+	}
+}
+
+func TestSelfBypassSocketAddrStorageUsesSocketPointer(t *testing.T) {
+	instructions := selfBypassStorageMarkInstructions(1, true)
+	found := false
+	for _, instruction := range instructions {
+		if instruction.OpCode == asm.LoadMemOp(asm.DWord) &&
+			instruction.Dst == asm.R2 && instruction.Src == asm.R6 &&
+			instruction.Offset == bpfSockAddrSocketOffset {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("socket-address storage lookup does not load ctx->sk at offset %d: %v", bpfSockAddrSocketOffset, instructions)
+	}
+	if instructions[0].OpCode != asm.LoadMapPtr(asm.R1, 1).OpCode {
+		t.Fatalf("socket-address storage lookup does not load the storage map: %v", instructions)
 	}
 }
 

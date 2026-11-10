@@ -207,7 +207,7 @@ func TestSelfBypassSocketAddrHooksRecordOnlyOwnerProcess(t *testing.T) {
 		{EnableTCP: true, EnableUDP: true, EnableIPv6: true},
 		{EnableUDP: true},
 	} {
-		if err = bypass.attachCgroupSocketAddr(path, config, owner); err != nil {
+		if err = bypass.attachCgroupSocketAddr(path, config, owner, -1); err != nil {
 			t.Fatalf("attach socket-address hooks %+v: %v", config, err)
 		}
 		if err = bypass.verifyOwnerMetadata(true, config); err != nil {

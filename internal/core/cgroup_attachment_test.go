@@ -15,6 +15,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestCgroupProgramLinkMechanism(t *testing.T) {
+	if got := cgroupProgramLinkMechanism(&legacyCgroupProgramLink{}); got != "legacy_attach" {
+		t.Fatalf("legacy attachment mechanism = %q, want legacy_attach", got)
+	}
+	if got := cgroupProgramLinkMechanism(&retryableTestCgroupProgramLink{}); got != "bpf_link" {
+		t.Fatalf("link attachment mechanism = %q, want bpf_link", got)
+	}
+}
+
 func TestLegacyCgroupProgramLinkRetainsTargetAfterDetachFailure(t *testing.T) {
 	cgroupFile, err := os.Create(filepath.Join(t.TempDir(), "cgroup"))
 	if err != nil {
