@@ -185,6 +185,7 @@ func TestSelfBypassModes(t *testing.T) {
 		{SelfBypassCgroupSocketAddr, "cgroup_socket_addr", "userspace_unregister", true},
 		{SelfBypassCgroupSocketAddrRelease, "cgroup_socket_addr_release", "socket_release", true},
 		{SelfBypassUserspaceRelease, "userspace_socket_cookie_release", "userspace_unregister", false},
+		{SelfBypassDirectTGID, "direct_tgid", "none", true},
 	}
 	for _, test := range tests {
 		if test.mode.String() != test.name {

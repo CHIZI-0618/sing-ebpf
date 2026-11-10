@@ -139,6 +139,9 @@ func probeCommonCapabilities(report *KernelProbeReport, memlockErr error, plan k
 		if plan.localCgroup {
 			probeProgramType(report, "local", KernelProbeRequired, CiliumEBPF.CGroupSockAddr,
 				"Applies local TCP connect and UDP sendmsg interception in the selected cgroup.")
+			probeProgramHelper(report, "local", KernelProbePerformance, CiliumEBPF.CGroupSockAddr,
+				asm.FnGetCurrentPidTgid, "bpf_get_current_pid_tgid",
+				"Bypasses the daemon directly by TGID without per-socket cookie state when the selected object loads.")
 			for _, helper := range cgroupRequiredHelpers(plan.enableUDP) {
 				probeProgramHelper(report, "local", KernelProbeRequired, CiliumEBPF.CGroupSockAddr,
 					helper.fn, helper.name, helper.detail)

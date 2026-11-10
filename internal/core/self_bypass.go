@@ -17,6 +17,7 @@ import (
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/features"
 	"github.com/sagernet/sing/common/control"
 	E "github.com/sagernet/sing/common/exceptions"
 	"golang.org/x/sys/unix"
@@ -62,12 +63,15 @@ type SelfBypass struct {
 	reclaimedSockets  atomic.Uint64
 	reclaimFailures   atomic.Uint64
 	reclaimLastAt     atomic.Int64
+	directTGID        uint32
+	directFallback    SelfBypassCgroupConfig
 }
 
 type SelfBypassCgroupConfig struct {
 	EnableTCP  bool
 	EnableUDP  bool
 	EnableIPv6 bool
+	Direct     bool
 }
 
 type SelfBypassMode uint32
@@ -87,6 +91,9 @@ const (
 	// SelfBypassCgroupSocketAddr uses connect/sendmsg hooks and userspace
 	// cookie cleanup when the kernel has no usable sock_release hook.
 	SelfBypassCgroupSocketAddr
+	// SelfBypassDirectTGID lets the local cgroup data plane compare the current
+	// TGID directly without publishing per-socket cookie state.
+	SelfBypassDirectTGID
 )
 
 func (m SelfBypassMode) String() string {
@@ -99,6 +106,8 @@ func (m SelfBypassMode) String() string {
 		return "cgroup_socket_addr_release"
 	case SelfBypassUserspaceRelease:
 		return "userspace_socket_cookie_release"
+	case SelfBypassDirectTGID:
+		return "direct_tgid"
 	default:
 		return "userspace_socket_cookie"
 	}
@@ -133,13 +142,17 @@ func (r SocketRegistration) Active() bool { return r.Cookie != 0 }
 
 const (
 	selfBypassDecisionCgroupTGID   = "cgroup_tgid"
+	selfBypassDecisionDirectTGID   = "direct_tgid"
 	selfBypassDecisionUserspace    = "userspace_control"
 	selfBypassProducerSocketCreate = "cgroup_sock_create"
 	selfBypassProducerCgroupAddr   = "cgroup_addr"
 	selfBypassProducerUserspace    = "userspace_control"
+	selfBypassProducerNone         = "none"
 	selfBypassVisibilityCookieHash = "cookie_hash"
+	selfBypassVisibilityDirectTGID = "direct_tgid"
 	selfBypassCleanupSocketRelease = "socket_release"
 	selfBypassCleanupUserspace     = "userspace_unregister"
+	selfBypassCleanupNone          = "none"
 	selfBypassReclaimProcFD        = "proc_fd_reclaim"
 )
 
@@ -151,6 +164,8 @@ func (m SelfBypassMode) CleanupMode() string {
 	switch m {
 	case SelfBypassCgroupSocket, SelfBypassCgroupSocketAddrRelease:
 		return "socket_release"
+	case SelfBypassDirectTGID:
+		return "none"
 	default:
 		return "userspace_unregister"
 	}
@@ -254,6 +269,27 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		return nil
 	}
 	b.fallbackReason = ""
+	if config.Direct {
+		ownerTGID, ownerErr := selfBypassOwner()
+		if ownerErr == nil && features.HaveProgramHelper(CiliumEBPF.CGroupSockAddr, asm.FnGetCurrentPidTgid) == nil {
+			config.Direct = false
+			b.directTGID = ownerTGID
+			b.directFallback = config
+			b.decisionBackend = selfBypassDecisionDirectTGID
+			b.producerBackend = selfBypassProducerNone
+			b.visibilityBackend = selfBypassVisibilityDirectTGID
+			b.cleanupBackend = selfBypassCleanupNone
+			b.reclaimBackend = "none"
+			b.attachmentBackend = "none"
+			b.mode.Store(uint32(SelfBypassDirectTGID))
+			return nil
+		}
+		if ownerErr != nil {
+			b.fallbackReason = "direct_tgid_owner_unavailable"
+		} else {
+			b.fallbackReason = "direct_tgid_helper_unavailable"
+		}
+	}
 	if lenOpenCgroupProgramLinks(b.links) > 0 {
 		if err := b.closeHooks(); err != nil {
 			return E.Cause(err, "finish previous eBPF self-bypass cleanup")
@@ -448,7 +484,8 @@ func (b *SelfBypass) CgroupAttached() bool {
 		return false
 	}
 	mode := SelfBypassMode(b.mode.Load())
-	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddr || mode == SelfBypassCgroupSocketAddrRelease
+	return mode == SelfBypassCgroupSocket || mode == SelfBypassCgroupSocketAddr ||
+		mode == SelfBypassCgroupSocketAddrRelease || mode == SelfBypassDirectTGID
 }
 
 func (b *SelfBypass) Mode() SelfBypassMode {
@@ -456,6 +493,48 @@ func (b *SelfBypass) Mode() SelfBypassMode {
 		return SelfBypassUserspace
 	}
 	return SelfBypassMode(b.mode.Load())
+}
+
+func (b *SelfBypass) DirectCgroupTGID() uint32 {
+	if b == nil {
+		return 0
+	}
+	b.access.RLock()
+	defer b.access.RUnlock()
+	return b.directTGID
+}
+
+// fallbackDirectCgroup activates the cookie bridge after a representative
+// direct-TGID object load failed on a vendor kernel. It is called before the
+// interception programs attach, so the transition cannot expose a mixed path.
+func (b *SelfBypass) fallbackDirectCgroup() error {
+	if b == nil {
+		return nil
+	}
+	b.access.Lock()
+	if b.directTGID == 0 {
+		b.access.Unlock()
+		return nil
+	}
+	config := b.directFallback
+	b.directTGID = 0
+	b.directFallback = SelfBypassCgroupConfig{}
+	b.mode.Store(uint32(SelfBypassUserspace))
+	b.decisionBackend = ""
+	b.producerBackend = ""
+	b.visibilityBackend = ""
+	b.cleanupBackend = ""
+	b.reclaimBackend = ""
+	b.attachmentBackend = "none"
+	b.fallbackReason = "direct_tgid_program_load_failed"
+	b.access.Unlock()
+	err := b.AttachCgroup(config)
+	if err == nil {
+		b.access.Lock()
+		b.fallbackReason = "direct_tgid_program_load_failed"
+		b.access.Unlock()
+	}
+	return err
 }
 
 // FallbackReason reports why the selected self-bypass mode fell back from a
@@ -1103,6 +1182,8 @@ func (b *SelfBypass) closeHooks() error {
 	b.cleanupBackend = selfBypassCleanupUserspace
 	b.reclaimBackend = selfBypassReclaimProcFD
 	b.attachmentBackend = "none"
+	b.directTGID = 0
+	b.directFallback = SelfBypassCgroupConfig{}
 	return closeErr
 }
 

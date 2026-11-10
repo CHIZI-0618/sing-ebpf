@@ -346,6 +346,33 @@ func TestEmbeddedCgroupStorageObjectLayout(t *testing.T) {
 	}
 }
 
+func TestEmbeddedCgroupDirectTGIDObjectLayout(t *testing.T) {
+	legacy, err := loadCgroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, err := loadCgroupTGID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasHelper := func(spec *CiliumEBPF.CollectionSpec) bool {
+		for _, program := range spec.Programs {
+			for _, instruction := range program.Instructions {
+				if instruction.IsBuiltinCall() && asm.BuiltinFunc(instruction.Constant) == asm.FnGetCurrentPidTgid {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if hasHelper(legacy) {
+		t.Fatal("legacy cgroup object unexpectedly requires current TGID")
+	}
+	if !hasHelper(direct) {
+		t.Fatal("direct-TGID cgroup object does not read the current TGID")
+	}
+}
+
 func TestEmbeddedTCObjectLayout(t *testing.T) {
 	testEmbeddedObjectLayout(t, loadTC, map[string]objectMapLayout{
 		"tc_control":             {4, 32},

@@ -116,6 +116,7 @@ const (
 	SelfBypassCgroupSocketAddrRelease = core.SelfBypassCgroupSocketAddrRelease
 	SelfBypassCgroupSocketAddr        = core.SelfBypassCgroupSocketAddr
 	SelfBypassUserspaceRelease        = core.SelfBypassUserspaceRelease
+	SelfBypassDirectTGID              = core.SelfBypassDirectTGID
 
 	KernelProbeModeAll    = core.KernelProbeModeAll
 	KernelProbeModeLocal  = core.KernelProbeModeLocal

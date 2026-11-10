@@ -92,6 +92,14 @@ var loadCgroupStorageCoarse = BPFGen.LoadCgroupStorageCoarse
 
 var loadCgroupCoarse = BPFGen.LoadCgroupCoarse
 
+var loadCgroupTGID = BPFGen.LoadCgroupTGID
+
+var loadCgroupTGIDStorage = BPFGen.LoadCgroupTGIDStorage
+
+var loadCgroupTGIDStorageCoarse = BPFGen.LoadCgroupTGIDStorageCoarse
+
+var loadCgroupTGIDCoarse = BPFGen.LoadCgroupTGIDCoarse
+
 var loadSharedNetwork = BPFGen.LoadSharedNetwork
 
 var loadICMPEchoReply = BPFGen.LoadICMPEchoReply

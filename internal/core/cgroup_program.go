@@ -85,6 +85,21 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 			}
 			return b.loadCgroupObjectPrograms()
 		}
+		if b.runtime.direct_tgid {
+			b.runtime.direct_tgid = false
+			b.selfBypassTGID = 0
+			if b.selfBypass != nil {
+				if fallbackErr := b.selfBypass.fallbackDirectCgroup(); fallbackErr != nil {
+					return nil, E.Errors(err, E.Cause(fallbackErr, "activate cookie-based self-bypass fallback"))
+				}
+			}
+			if b.listenerPort != 0 {
+				if updateErr := b.updateCgroupControl(b.listenerPort); updateErr != nil {
+					return nil, E.Errors(err, updateErr)
+				}
+			}
+			return b.loadCgroupObjectPrograms()
+		}
 		return nil, err
 	}
 	programs := make([]*CiliumEBPF.Program, cgroupProgramCount)
@@ -99,6 +114,18 @@ func (b *CgroupBackend) loadCgroupObjectPrograms() ([]*CiliumEBPF.Program, error
 }
 
 func cgroupLoadSpec(runtimeState *cgroupRuntime) func() (*CiliumEBPF.CollectionSpec, error) {
+	if runtimeState.direct_tgid {
+		if runtimeState.sk_storage {
+			if runtimeState.coarse_time_supported {
+				return loadCgroupTGIDStorageCoarse
+			}
+			return loadCgroupTGIDStorage
+		}
+		if runtimeState.coarse_time_supported {
+			return loadCgroupTGIDCoarse
+		}
+		return loadCgroupTGID
+	}
 	if runtimeState.sk_storage {
 		if runtimeState.coarse_time_supported {
 			return loadCgroupStorageCoarse
@@ -243,6 +270,7 @@ func (b *CgroupBackend) updateCgroupControl(listenerPort uint16) error {
 		RedirectIPv4Prefix:   ipv4Prefix,
 		RedirectIPv4HostMask: ipv4HostMask,
 		ListenerPort:         listenerPort,
+		SelfBypassTGID:       b.selfBypassTGID,
 	}
 	if b.redirectIPv6.IsValid() {
 		address := b.redirectIPv6.Addr().As16()

@@ -97,6 +97,7 @@ type cgroupRuntime struct {
 	getpeername4_supported bool
 	getpeername6_supported bool
 	coarse_time_supported  bool
+	direct_tgid            bool
 	enable_tcp             bool
 	enable_udp             bool
 	uid_policy             bool
@@ -139,6 +140,7 @@ type CgroupBackend struct {
 	networkGeneration      uint32
 	listenerPort           uint16
 	selfBypass             *SelfBypass
+	selfBypassTGID         uint32
 }
 
 func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
@@ -312,9 +314,11 @@ func PrepareCgroup(config CgroupConfig) (*CgroupBackend, error) {
 		enableUDP:           config.EnableUDP,
 		udpTimeoutSeconds:   udpTimeoutSeconds,
 		selfBypass:          config.selfBypass,
+		selfBypassTGID:      config.selfBypassTGID,
 		bypassIPv4CIDR:      slices.Clone(policy.localInitialBypass.ipv4),
 		bypassIPv6CIDR:      slices.Clone(policy.localInitialBypass.ipv6),
 	}
+	runtimeState.direct_tgid = config.selfBypassTGID != 0
 	if err = populateCompiledPolicyMaps(policyMapTargets{
 		LocalForceIPv4:  runtimeState.maps["cgroup_force4"],
 		LocalForceIPv6:  runtimeState.maps["cgroup_force6"],

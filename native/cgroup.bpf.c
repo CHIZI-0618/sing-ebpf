@@ -98,6 +98,9 @@ static void *(*sk_storage_get)(void *map, void *sk, void *value, __u64 flags) =
     (void *)BPF_FUNC_sk_storage_get;
 #endif
 static __u64 (*get_current_uid_gid)(void) = (void *)BPF_FUNC_get_current_uid_gid;
+#ifdef SB_EBPF_DIRECT_TGID
+static __u64 (*get_current_pid_tgid)(void) = (void *)BPF_FUNC_get_current_pid_tgid;
+#endif
 static __u64 (*ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
 static long (*ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
     (void *)BPF_FUNC_ringbuf_output;
@@ -158,6 +161,16 @@ INLINE bool is_cookie_bypassed(__u64 cookie) {
     __u32 *metadata = map_lookup(&cgroup_socket_bypass, &cookie);
     return metadata != 0 &&
         (*metadata & SB_EBPF_SOCKET_METADATA_SELF_BYPASS) != 0U;
+}
+
+INLINE bool is_direct_self_bypassed(const struct sb_ebpf_cgroup_control *config) {
+#ifdef SB_EBPF_DIRECT_TGID
+    if (config->self_bypass_tgid == 0U) return false;
+    return (__u32)(get_current_pid_tgid() >> 32U) == config->self_bypass_tgid;
+#else
+    (void)config;
+    return false;
+#endif
 }
 
 INLINE bool uid_bypassed(const struct sb_ebpf_cgroup_control *config) {
@@ -696,6 +709,7 @@ INLINE int handle_v4(
     enum cgroup_protocol_mode protocol_mode) {
     const struct sb_ebpf_cgroup_control *config = control();
     if (config == 0) return 1;
+    if (is_direct_self_bypassed(config)) return 1;
     __u8 protocol;
     if (protocol_mode == CGROUP_PROTOCOL_TCP_ONLY) {
         if (!connect_hook || ctx->protocol != TCP_VALUE) return 1;
@@ -781,6 +795,7 @@ INLINE int handle_v6(
     enum cgroup_protocol_mode protocol_mode) {
     const struct sb_ebpf_cgroup_control *config = control();
     if (config == 0) return 1;
+    if (is_direct_self_bypassed(config)) return 1;
     __u32 address[4];
     __builtin_memcpy(address, ctx->user_ip6, sizeof(address));
     __u8 protocol;

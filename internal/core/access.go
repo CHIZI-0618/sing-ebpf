@@ -40,6 +40,7 @@ func PrepareCgroupWithSelfBypass(config CgroupConfig, value any) (*CgroupBackend
 		}
 		config.SelfBypassMap = sockets
 		config.selfBypass = bypass
+		config.selfBypassTGID = bypass.DirectCgroupTGID()
 	}
 	return PrepareCgroup(config)
 }

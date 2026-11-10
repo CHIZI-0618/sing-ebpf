@@ -42,11 +42,14 @@ struct sb_ebpf_cgroup_control {
     __u16 listener_port;
     __u16 reserved_policy;
     __u8 redirect_ipv6_prefix[8];
+    __u32 self_bypass_tgid;
 };
 
-_Static_assert(sizeof(struct sb_ebpf_cgroup_control) == 32U, "unexpected cgroup control ABI");
+_Static_assert(sizeof(struct sb_ebpf_cgroup_control) == 36U, "unexpected cgroup control ABI");
 _Static_assert(__builtin_offsetof(struct sb_ebpf_cgroup_control, network_generation) == 4U,
     "unexpected cgroup network generation ABI");
+_Static_assert(__builtin_offsetof(struct sb_ebpf_cgroup_control, self_bypass_tgid) == 32U,
+    "unexpected cgroup self-bypass TGID ABI");
 
 struct sb_ebpf_listener_key {
     __u8 family;
