@@ -273,20 +273,30 @@ its connect/sendmsg programs compare the current TGID and bypass the consumer
 without publishing per-socket state. The generated legacy object does not
 reference that helper; a missing helper or rejected direct object therefore
 falls back to the existing cookie producer chain without raising the minimum
-kernel requirement. Local TC continues to use the cookie bridge because a TC
-packet does not carry reliable process identity. Userspace socket controls are
-the final producer fallback when process cgroup hooks cannot maintain the map.
+kernel requirement. Local TC first tries socket-local storage: cgroup
+socket-create or connect/sendmsg hooks publish the self-bypass bit, and the TC
+classifier reads it through the packet's full socket. The same hooks retain a
+cookie-hash shadow for sockets whose storage allocation fails and for sockets
+created while the runtime changes paths. If the representative TC storage
+object is rejected, the ordinary cookie-only object is loaded instead.
+Userspace can publish storage through a live socket FD when the process cgroup
+is not exclusive; a failed per-socket storage update falls back to the cookie
+hash. These choices do not raise the minimum kernel requirement.
 
 Self-bypass diagnostics model decision, producer, visibility, cleanup, reclaim,
 and attachment independently. A direct local-cgroup path reports
 `direct_tgid`, `none`, `direct_tgid`, `none`, `none`, and `none`. Cookie paths
 report `cgroup_tgid` or `userspace_control` as the decision,
 `cgroup_sock_create`, `cgroup_addr`, or `userspace_control` as the producer,
-`cookie_hash` as visibility, and `socket_release` or `userspace_unregister` as
-cleanup. `proc_fd_reclaim` is reported only as bounded map-full recovery, with
-attempt, reclaimed-entry, failure, and last-run counters. Attachment diagnostics
-separately report `bpf_link`, `legacy_attach`, or `mixed`. The registration token
-returned to consumers ties cleanup to the socket that was actually published.
+`sk_storage` or `cookie_hash` as visibility, and `sk_storage`, `socket_release`,
+or `userspace_unregister` as cleanup. Storage is reported only after the actual
+TC object has loaded; map creation or a preliminary helper probe is not enough.
+The storage-write-failure and cookie-fallback counters cover userspace
+publication. `proc_fd_reclaim` is reported only as bounded cookie map-full
+recovery, with attempt, reclaimed-entry, failure, and last-run counters.
+Attachment diagnostics separately report `bpf_link`, `legacy_attach`, or
+`mixed`. The registration token ties fallback-cookie cleanup to the socket that
+was actually published.
 
 ## Socket assignment
 
@@ -298,10 +308,13 @@ and performs direct `bpf_skc_lookup_tcp` lookup. UDP lookup substitutes only the
 internal listener port. `tc_assignment` records the original tuple, ingress
 interface, shared source MAC, packet path, and (for local process matching) the
 socket cookie used to recover the process owner. The separate
-`tc_self_sockets` map (shared as `sb_self_sockets`) contains consumer self-bypass
-flags and, when UID policy tracking is enabled, application socket policy flags.
-Local egress checks the self-bypass bit before interception and uses the policy
-bits when evaluating UID decisions. CIDR bypass rules do not populate this map.
+`tc_self_sockets` map (shared as `sb_self_sockets`) contains the cookie fallback
+for consumer self-bypass flags and, when UID policy tracking is enabled,
+application socket policy flags. When the optional storage object loads, local
+egress checks `sb_self_store` first and falls back to the cookie map; shared
+ingress never reads socket storage. The policy bits remain in the cookie map
+when evaluating UID decisions. CIDR bypass rules do not populate either
+self-bypass backend.
 The optional cgroup socket-address tracker records cookie, PID, and UID in a
 bounded LRU map. Userspace then reads only `/proc/<pid>/exe` instead of scanning
 all process file descriptors. The tracker always attaches to the cgroup v2
@@ -357,7 +370,8 @@ before source selectors by default, or after selectors when
 Port 53 has no special meaning in native code. Consumers such as sing-box
 compile DNS modes into these generic port actions.
 
-Local egress checks the socket-cookie self-bypass map. Shared source CIDR and
+Local egress checks socket-local self-bypass metadata when selected, then the
+socket-cookie fallback map. Shared source CIDR and
 MAC include/exclude policies are evaluated only on the shared path. If either
 include list is configured, CIDR and MAC are alternative selectors (OR); a
 matching CIDR or MAC exclude always wins. Local and shared destination-bypass
