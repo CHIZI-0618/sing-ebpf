@@ -107,6 +107,7 @@ type TCConfig struct {
 	Policy             CompiledPolicy
 	RoutingMark        uint32
 	SelfBypassMap      *CiliumEBPF.Map
+	SelfBypassStorage  *CiliumEBPF.Map
 	TrackProcess       bool
 	AssignmentCapacity uint32
 	// NetworkGeneration identifies the current network incarnation. Zero uses
@@ -151,12 +152,15 @@ type tcRuntime struct {
 // close releases the native TC object owned by this runtime. An externally
 // supplied self-bypass map is removed from the object set first so the caller
 // keeps ownership of that map while all generated resources are closed here.
-func (r *tcRuntime) close(externalSelfMap bool) error {
+func (r *tcRuntime) close(externalSelfMap, externalSelfStorage bool) error {
 	if r == nil {
 		return nil
 	}
 	if externalSelfMap {
 		delete(r.maps, "tc_self_sockets")
+	}
+	if externalSelfStorage {
+		delete(r.maps, "tc_self_storage")
 	}
 	err := closeObjectResources(r.programs, r.maps)
 	r.programs = nil
@@ -165,21 +169,24 @@ func (r *tcRuntime) close(externalSelfMap bool) error {
 }
 
 type TCBackend struct {
-	access           sync.RWMutex
-	health           backendHealth
-	runtime          *tcRuntime
-	tcpListenerMap   bool
-	programsExposed  bool
-	control          tcControl
-	controlMapFD     int
-	flowStore        tcFlowStore
-	selfMapExternal  bool
-	bypassIPv4       []netip.Prefix
-	bypassIPv6       []netip.Prefix
-	sharedBypassIPv4 []netip.Prefix
-	sharedBypassIPv6 []netip.Prefix
-	hostIPv4         [][4]byte
-	hostIPv6         [][16]byte
+	access              sync.RWMutex
+	health              backendHealth
+	runtime             *tcRuntime
+	tcpListenerMap      bool
+	programsExposed     bool
+	control             tcControl
+	controlMapFD        int
+	flowStore           tcFlowStore
+	selfMapExternal     bool
+	selfStorageExternal bool
+	selfStorageActive   bool
+	selfStorageFallback string
+	bypassIPv4          []netip.Prefix
+	bypassIPv6          []netip.Prefix
+	sharedBypassIPv4    []netip.Prefix
+	sharedBypassIPv6    []netip.Prefix
+	hostIPv4            [][4]byte
+	hostIPv6            [][16]byte
 	// icmpEchoReply is nil unless TCConfig.ICMPEchoReply was set; see
 	// tc_icmp_echo_reply.go. It is a standalone backend (ICMPEchoReplyBackend) rather
 	// than fields inline here because shared.data_plane: packet_rewrite hosts
@@ -261,14 +268,32 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 		mapOverrides["tc_self_sockets"] = mapSpecOverride{
 			name: "sb_self_sockets", mapType: CiliumEBPF.Hash, maxEntries: selfMapCapacity, flags: bpfFlagNoPrealloc,
 		}
+		if config.SelfBypassStorage != nil {
+			mapOverrides["tc_self_storage"] = mapSpecOverride{
+				name: "sb_self_store", mapType: CiliumEBPF.SkStorage,
+				flags: bpfFlagNoPrealloc, keySize: 4, valueSize: 4,
+				keyType: selfBypassStorageKeyType(), valueType: selfBypassStorageValueType(),
+			}
+		}
 	}
 	legacyTCP := forceLegacyTCP || !config.EnableTCP
 	mapOverrides["tc_return"] = mapSpecOverride{name: "sb_tc_return", mapType: CiliumEBPF.Hash, maxEntries: config.AssignmentCapacity}
 	mapOverrides["tc_return_frag"] = mapSpecOverride{name: "sb_tc_rfrag", mapType: CiliumEBPF.LRUHash, maxEntries: min(config.AssignmentCapacity, 1024)}
-	maps, loadedPrograms, err := loadTCResources(config, mapOverrides, legacyTCP)
+	useStorage := config.EnableLocal && config.SelfBypassStorage != nil
+	storageAttempted := useStorage
+	maps, loadedPrograms, err := loadTCResources(config, mapOverrides, legacyTCP, useStorage)
+	if err != nil && useStorage {
+		useStorage = false
+		maps, loadedPrograms, err = loadTCResources(config, mapOverrides, legacyTCP, false)
+	}
 	if err != nil && config.EnableTCP && !forceLegacyTCP {
 		legacyTCP = true
-		maps, loadedPrograms, err = loadTCResources(config, mapOverrides, true)
+		useStorage = config.EnableLocal && config.SelfBypassStorage != nil
+		maps, loadedPrograms, err = loadTCResources(config, mapOverrides, true, useStorage)
+		if err != nil && useStorage {
+			useStorage = false
+			maps, loadedPrograms, err = loadTCResources(config, mapOverrides, true, false)
+		}
 	}
 	if err != nil {
 		return nil, explainBPFPermissionError(err, memlockErr)
@@ -319,7 +344,15 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 				capacity: config.AssignmentCapacity,
 			},
 		},
-		selfMapExternal: config.EnableLocal && config.SelfBypassMap != nil,
+		selfMapExternal:     config.EnableLocal && config.SelfBypassMap != nil,
+		selfStorageExternal: useStorage,
+		selfStorageActive:   useStorage,
+		selfStorageFallback: func() string {
+			if storageAttempted && !useStorage {
+				return "tc_storage_object_load_failed"
+			}
+			return ""
+		}(),
 	}
 	// From here, backend owns maps and loadedPrograms: giving up on either of the
 	// steps below has to close it rather than just returning the step's error, or
@@ -361,7 +394,7 @@ func prepareTC(config TCConfig, forceLegacyTCP bool) (*TCBackend, error) {
 	return backend, nil
 }
 
-func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, legacyTCP bool) (map[string]*CiliumEBPF.Map, []*CiliumEBPF.Program, error) {
+func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, legacyTCP, storage bool) (map[string]*CiliumEBPF.Map, []*CiliumEBPF.Program, error) {
 	mapOverrides := make(map[string]mapSpecOverride, len(baseOverrides))
 	for name, override := range baseOverrides {
 		mapOverrides[name] = override
@@ -369,7 +402,13 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 	if legacyTCP {
 		delete(mapOverrides, "tc_listener_sockets")
 	}
-	maps, err := loadObjectMaps(loadTC, mapOverrides)
+	loadSpec := loadTC
+	if storage {
+		loadSpec = loadTCStorage
+	} else {
+		delete(mapOverrides, "tc_self_storage")
+	}
+	maps, err := loadObjectMaps(loadSpec, mapOverrides)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -377,6 +416,12 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 	if externalSelfMap {
 		createdMap := maps["tc_self_sockets"]
 		maps["tc_self_sockets"] = config.SelfBypassMap
+		_ = createdMap.Close()
+	}
+	externalSelfStorage := storage && config.SelfBypassStorage != nil
+	if externalSelfStorage {
+		createdMap := maps["tc_self_storage"]
+		maps["tc_self_storage"] = config.SelfBypassStorage
 		_ = createdMap.Close()
 	}
 	selections := make([]programSelection, 0, tcProgramCount)
@@ -402,13 +447,16 @@ func loadTCResources(config TCConfig, baseOverrides map[string]mapSpecOverride, 
 	}
 	selections = append(selections, programSelection{section: delivery, kernelProgramName: kernelProgramNameTCDelivery}, programSelection{section: "classifier/isolated_return", kernelProgramName: "sb_tc_return"})
 	programIndexes = append(programIndexes, tcProgramDeliveryIngress, tcProgramIsolatedReturn)
-	loadedPrograms, err := loadObjectPrograms(loadTC, maps, selections)
+	loadedPrograms, err := loadObjectPrograms(loadSpec, maps, selections)
 	if err != nil {
 		if externalSelfMap {
 			// The caller's map is deleted from this map first so closeMaps below
 			// does not reach it: it is not this function's to close, whether or
 			// not the rest of the load succeeded.
 			delete(maps, "tc_self_sockets")
+		}
+		if externalSelfStorage {
+			delete(maps, "tc_self_storage")
 		}
 		// closeMaps closing something here does not mean the map it held is
 		// actually gone — the same caveat as backend.Close() above — but a
@@ -687,6 +735,19 @@ func (b *TCBackend) TCPListenerLookupMode() string {
 	default:
 		return "sockmap"
 	}
+}
+
+// UsesSelfBypassStorage reports the path selected by the representative TC
+// object load, not merely preliminary map/helper availability.
+func (b *TCBackend) UsesSelfBypassStorage() bool {
+	return b != nil && b.selfStorageActive
+}
+
+func (b *TCBackend) SelfBypassStorageFallbackReason() string {
+	if b == nil {
+		return ""
+	}
+	return b.selfStorageFallback
 }
 
 // Stats reads the native TC error counters on demand. It performs one map
@@ -1015,7 +1076,7 @@ func (b *TCBackend) Close() error {
 	}
 	b.control.Enabled = 0
 	_ = b.updateControlLocked()
-	closeErr := b.runtime.close(b.selfMapExternal)
+	closeErr := b.runtime.close(b.selfMapExternal, b.selfStorageExternal)
 	closeErr = E.Errors(closeErr, b.icmpEchoReply.Close())
 	b.icmpEchoReply = nil
 	b.runtime = nil

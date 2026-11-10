@@ -416,6 +416,37 @@ func TestEmbeddedTCObjectLayout(t *testing.T) {
 	})
 }
 
+func TestEmbeddedTCStorageObjectLayout(t *testing.T) {
+	spec, err := loadTCStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := spec.Maps["tc_self_storage"]
+	if storage == nil || storage.Type != CiliumEBPF.SkStorage || storage.KeySize != 4 || storage.ValueSize != 4 {
+		t.Fatalf("invalid TC self-bypass storage map: %+v", storage)
+	}
+	var storageGet, fullsock bool
+	for _, program := range spec.Programs {
+		if !strings.HasPrefix(program.SectionName, "classifier/local_egress_") {
+			continue
+		}
+		for _, instruction := range program.Instructions {
+			if !instruction.IsBuiltinCall() {
+				continue
+			}
+			switch asm.BuiltinFunc(instruction.Constant) {
+			case asm.FnSkStorageGet:
+				storageGet = true
+			case asm.FnSkFullsock:
+				fullsock = true
+			}
+		}
+	}
+	if !storageGet || !fullsock {
+		t.Fatalf("TC storage reader helpers: sk_storage_get=%v sk_fullsock=%v", storageGet, fullsock)
+	}
+}
+
 func TestEmbeddedTCAssignmentIsExplicitlyOwned(t *testing.T) {
 	spec, err := loadTC()
 	if err != nil {
@@ -537,7 +568,7 @@ func TestKernelMapNames(t *testing.T) {
 		"sb_tc_ctl", "sb_tc_listen", "sb_tc_assign", "sb_tc_claim", "sb_tc_stats", "sb_tc_uid", "sb_tc_lbypass4",
 		"sb_tc_lbypass6", "sb_tc_sbypass4", "sb_tc_sbypass6", "sb_tc_insrc4", "sb_tc_insrc6",
 		"sb_tc_exsrc4", "sb_tc_exsrc6", "sb_tc_insmac", "sb_tc_exsmac", "sb_tc_host4", "sb_tc_host6",
-		"sb_tc_lport", "sb_tc_sport", "sb_self_sockets", "sb_tc_return", "sb_tc_rfrag",
+		"sb_tc_lport", "sb_tc_sport", "sb_self_sockets", "sb_self_store", "sb_tc_return", "sb_tc_rfrag",
 		"sb_tc_lforce4", "sb_tc_lforce6", "sb_tc_sforce4", "sb_tc_sforce6",
 		"sb_sh_control", "sb_sh_stats", "sb_sh_orig", "sb_sh_bypass", "sb_sh_token", "sb_sh_host4", "sb_sh_host6",
 		"sb_sh_inc4", "sb_sh_inc6", "sb_sh_exc4", "sb_sh_exc6", "sb_sh_inmac", "sb_sh_exmac", "sb_sh_port", "sb_sh_scratch",

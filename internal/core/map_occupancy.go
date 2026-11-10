@@ -105,6 +105,7 @@ var mapMetadataRegistry = map[string]mapMetadata{
 	"sb_self_sockets": {category: MapCategoryRuntime, admissionCritical: true},
 	// Socket-local storage is kernel-owned lifetime state. It has no global
 	// max_entries occupancy and must not make diagnostics report degraded.
+	"sb_self_store":   {category: MapCategoryRuntime},
 	"sb_cg_sock_byp":  {category: MapCategoryRuntime, admissionCritical: true},
 	"sb_cg_sk_peer":   {category: MapCategoryRuntime, admissionCritical: true},
 	"sb_cg_udp":       {category: MapCategoryRuntime, admissionCritical: true},

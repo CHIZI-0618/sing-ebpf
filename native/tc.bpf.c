@@ -267,6 +267,11 @@ MAP(tc_stats, __u32, __u64, BPF_MAP_TYPE_PERCPU_ARRAY, SB_TC_STAT_COUNT);
 /* Self-bypass is core ownership state. Userspace or sock_release removes
  * entries; silent LRU eviction can recapture an active proxy socket. */
 MAP_FLAGS(tc_self_sockets, __u64, __u32, BPF_MAP_TYPE_HASH, 65536U, BPF_F_NO_PREALLOC);
+#ifdef SB_TC_SELF_BYPASS_STORAGE
+/* Optional socket-local visibility for local egress. The cookie hash remains
+ * present as a transition and per-socket compatibility fallback. */
+MAP_FLAGS(tc_self_storage, int, __u32, BPF_MAP_TYPE_SK_STORAGE, 0U, BPF_F_NO_PREALLOC);
+#endif
 MAP(tc_uid_policy, struct sb_tc_uid_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 4096U);
 MAP(tc_local_bypass_ipv4, struct sb_tc_ipv4_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
 MAP(tc_local_bypass_ipv6, struct sb_tc_ipv6_lpm_key, __u8, BPF_MAP_TYPE_LPM_TRIE, 65536U);
@@ -298,6 +303,11 @@ static __u32 next_assignment_generation(const struct sb_tc_assign_value *existin
 }
 static __u32 (*get_socket_uid)(void *ctx) = (void *)BPF_FUNC_get_socket_uid;
 static __u64 (*get_socket_cookie)(void *ctx) = (void *)BPF_FUNC_get_socket_cookie;
+#ifdef SB_TC_SELF_BYPASS_STORAGE
+static struct bpf_sock *(*sk_fullsock)(struct bpf_sock *socket) = (void *)BPF_FUNC_sk_fullsock;
+static void *(*sk_storage_get)(void *map, void *socket, void *value, __u64 flags) =
+    (void *)BPF_FUNC_sk_storage_get;
+#endif
 static long (*redirect)(int ifindex, __u64 flags) = (void *)BPF_FUNC_redirect;
 static long (*skb_store_bytes)(void *ctx, __u32 offset, const void *from, __u32 length, __u64 flags) =
     (void *)BPF_FUNC_skb_store_bytes;
@@ -368,6 +378,19 @@ INLINE bool uid_bypassed(struct __sk_buff *skb, const struct sb_tc_control *cont
     __builtin_memcpy(key.uid, &uid, sizeof(uid));
     bool matched = map_lookup(&tc_uid_policy, &key) != 0;
     return (control->flags & SB_TC_FLAG_UID_DEFAULT_BYPASS) != 0U ? !matched : matched;
+}
+
+INLINE __u32 socket_storage_metadata(struct __sk_buff *skb) {
+#ifdef SB_TC_SELF_BYPASS_STORAGE
+    if (skb->sk != 0) {
+        struct bpf_sock *socket = sk_fullsock(skb->sk);
+        if (socket != 0) {
+            __u32 *storage = sk_storage_get(&tc_self_storage, socket, 0, 0U);
+            if (storage != 0) return *storage;
+        }
+    }
+#endif
+    return 0U;
 }
 
 INLINE __u32 socket_metadata(__u64 socket_cookie) {
@@ -807,6 +830,7 @@ INLINE int local_egress_mark(struct __sk_buff *skb, bool ethernet, bool track_pr
     // self-bypass check.
     int parsed = parse_flow(skb, control, SB_TC_FLAG_LOCAL_IPV6, ethernet, false, &key, source_mac, &flags);
     if (parsed == SB_TC_PARSE_PASS) return TC_ACT_UNSPEC;
+    if ((socket_storage_metadata(skb) & SB_EBPF_SOCKET_METADATA_SELF_BYPASS) != 0U) return TC_ACT_UNSPEC;
     __u64 socket_cookie = get_socket_cookie(skb);
     __u32 socket_metadata_value = socket_metadata(socket_cookie);
     if ((socket_metadata_value & SB_EBPF_SOCKET_METADATA_SELF_BYPASS) != 0U) return TC_ACT_UNSPEC;

@@ -106,7 +106,7 @@ func (b *SelfBypass) RuntimeResources() (r RuntimeResources) {
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
-	r.add(b.programs, map[string]*CiliumEBPF.Map{"sockets": b.sockets})
+	r.add(b.programs, map[string]*CiliumEBPF.Map{"sockets": b.sockets, "storage": b.storage})
 	return
 }
 func (b *ProcessTracker) RuntimeResources() (r RuntimeResources) {

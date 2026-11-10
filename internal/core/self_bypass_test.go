@@ -95,6 +95,70 @@ func TestSelfBypassInstructionsUseSocketCookie(t *testing.T) {
 	}
 }
 
+func TestSelfBypassStorageInstructionsPublishAndShadow(t *testing.T) {
+	for name, instructions := range map[string]asm.Instructions{
+		"create":      selfBypassCreateInstructions(1, 1, 2),
+		"socket_addr": selfBypassSocketAddrInstructions(1, 1, 2),
+	} {
+		var storage, cookie bool
+		for _, instruction := range instructions {
+			if !instruction.IsBuiltinCall() {
+				continue
+			}
+			switch asm.BuiltinFunc(instruction.Constant) {
+			case asm.FnSkStorageGet:
+				storage = true
+			case asm.FnGetSocketCookie:
+				cookie = true
+			}
+		}
+		if !storage || !cookie {
+			t.Fatalf("%s storage writer helpers: storage=%v cookie=%v", name, storage, cookie)
+		}
+		if err := instructions.Marshal(io.Discard, binary.LittleEndian); err != nil {
+			t.Fatalf("%s storage instructions do not assemble: %v", name, err)
+		}
+	}
+}
+
+func TestSelfBypassStorageMapABI(t *testing.T) {
+	spec := selfBypassStorageMapSpec()
+	if spec.Name != "sb_self_store" || spec.Type != CiliumEBPF.SkStorage ||
+		spec.KeySize != 4 || spec.ValueSize != 4 || spec.MaxEntries != 0 ||
+		spec.Flags != bpfFlagNoPrealloc || spec.Key == nil || spec.Value == nil {
+		t.Fatalf("unexpected self-bypass storage ABI: %+v", spec)
+	}
+}
+
+func TestSelfBypassStorageUserspaceSocketLifetime(t *testing.T) {
+	storage, err := CiliumEBPF.NewMap(selfBypassStorageMapSpec())
+	if err != nil {
+		t.Skipf("socket storage is unavailable here: %v", err)
+	}
+	defer storage.Close()
+	conn, rawConn, _ := testSocketCookie(t)
+	var key int32
+	value := uint32(SocketMetadataSelfBypass)
+	if err = control.Raw(rawConn, func(fd uintptr) error {
+		key = int32(fd)
+		return storage.Update(&key, &value, CiliumEBPF.UpdateAny)
+	}); err != nil {
+		_ = conn.Close()
+		t.Fatalf("publish socket-local metadata: %v", err)
+	}
+	var actual uint32
+	if err = storage.Lookup(&key, &actual); err != nil || actual != value {
+		_ = conn.Close()
+		t.Fatalf("lookup socket-local metadata: value=%d err=%v", actual, err)
+	}
+	if err = conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = storage.Lookup(&key, &actual); !errors.Is(err, CiliumEBPF.ErrKeyNotExist) && !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("socket-local metadata survived close: %v", err)
+	}
+}
+
 func TestSelfBypassInstructionsRecordOwner(t *testing.T) {
 	const owner = 4242
 	for name, instructions := range map[string]asm.Instructions{
@@ -216,6 +280,69 @@ func TestSelfBypassLifecycleDimensions(t *testing.T) {
 		diagnostics.ReclaimBackend != "none" ||
 		bypass.NeedsUserspaceRegistration() || bypass.NeedsUserspaceUnregister() {
 		t.Fatalf("unexpected cgroup lifecycle: %+v", diagnostics)
+	}
+}
+
+func TestSelfBypassStorageActivationUsesActualProducer(t *testing.T) {
+	storage := &CiliumEBPF.Map{}
+	cgroup := &SelfBypass{storage: storage, storageProducer: true}
+	cgroup.mode.Store(uint32(SelfBypassCgroupSocket))
+	cgroup.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerSocketCreate, selfBypassCleanupSocketRelease)
+	cgroup.ActivateStorage()
+	if diagnostics := cgroup.Diagnostics(); diagnostics.VisibilityBackend != selfBypassVisibilitySKStorage ||
+		diagnostics.ProducerBackend != selfBypassProducerSocketCreate ||
+		diagnostics.CleanupBackend != selfBypassCleanupSKStorage ||
+		cgroup.NeedsUserspaceRegistration() || cgroup.NeedsUserspaceUnregister() {
+		t.Fatalf("unexpected cgroup storage lifecycle: %+v", diagnostics)
+	}
+	address := &SelfBypass{storage: storage, storageProducer: true}
+	address.mode.Store(uint32(SelfBypassCgroupSocketAddr))
+	address.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerUserspace, selfBypassCleanupUserspace)
+	address.ActivateStorage()
+	if diagnostics := address.Diagnostics(); diagnostics.ProducerBackend != selfBypassProducerCgroupAddr ||
+		diagnostics.CleanupBackend != selfBypassCleanupSKStorage ||
+		!address.NeedsUserspaceRegistration() || !address.NeedsUserspaceUnregister() {
+		t.Fatalf("unexpected address-hook storage lifecycle: %+v", diagnostics)
+	}
+
+	userspace := &SelfBypass{storage: storage}
+	userspace.setPathDiagnostics(selfBypassDecisionUserspace, selfBypassProducerUserspace, selfBypassCleanupUserspace)
+	userspace.ActivateStorage()
+	if diagnostics := userspace.Diagnostics(); diagnostics.VisibilityBackend != selfBypassVisibilitySKStorage ||
+		diagnostics.ProducerBackend != selfBypassProducerUserspace ||
+		diagnostics.CleanupBackend != selfBypassCleanupSKStorage ||
+		!userspace.NeedsUserspaceRegistration() || !userspace.NeedsUserspaceUnregister() {
+		t.Fatalf("unexpected userspace storage lifecycle: %+v", diagnostics)
+	}
+}
+
+func TestSelfBypassStorageSelectionRequiresCurrentReader(t *testing.T) {
+	storage := &CiliumEBPF.Map{}
+	bypass := &SelfBypass{
+		storage:          storage,
+		storageRequested: true,
+		storageActive:    true,
+	}
+	if selected := bypass.beginStorageSelection(); selected != storage {
+		t.Fatal("storage selection did not return the prepared map")
+	}
+	if bypass.storageActive {
+		t.Fatal("storage selection retained the previous TC reader state")
+	}
+}
+
+func TestSelfBypassStorageFallbackRestoresCookieDiagnostics(t *testing.T) {
+	bypass := &SelfBypass{storageRequested: true}
+	bypass.mode.Store(uint32(SelfBypassCgroupSocket))
+	bypass.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerUserspace, selfBypassCleanupSKStorage)
+	bypass.setStorageFallback("tc_storage_object_load_failed")
+	diagnostics := bypass.Diagnostics()
+	if diagnostics.VisibilityBackend != selfBypassVisibilityCookieHash ||
+		diagnostics.ProducerBackend != selfBypassProducerSocketCreate ||
+		diagnostics.CleanupBackend != selfBypassCleanupSocketRelease ||
+		diagnostics.FallbackReason != "tc_storage_object_load_failed" ||
+		bypass.storageRequested {
+		t.Fatalf("storage fallback did not restore the cookie path: %+v", diagnostics)
 	}
 }
 

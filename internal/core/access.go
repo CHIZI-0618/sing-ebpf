@@ -63,6 +63,16 @@ func PrepareTCWithSelfBypass(config TCConfig, value any) (*TCBackend, error) {
 			return nil, err
 		}
 		config.SelfBypassMap = sockets
+		if config.EnableLocal {
+			config.SelfBypassStorage = bypass.beginStorageSelection()
+		}
+		backend, prepareErr := PrepareTC(config)
+		if prepareErr == nil && backend != nil && backend.UsesSelfBypassStorage() {
+			bypass.ActivateStorage()
+		} else if prepareErr == nil && backend != nil {
+			bypass.setStorageFallback(backend.SelfBypassStorageFallbackReason())
+		}
+		return backend, prepareErr
 	}
 	return PrepareTC(config)
 }

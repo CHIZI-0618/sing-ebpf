@@ -84,6 +84,8 @@ func newCgroupHookOccupiedError(attachType CiliumEBPF.AttachType, programs []lin
 
 var loadTC = BPFGen.LoadTC
 
+var loadTCStorage = BPFGen.LoadTCStorage
+
 var loadCgroup = BPFGen.LoadCgroup
 
 var loadCgroupStorage = BPFGen.LoadCgroupStorage
