@@ -16,8 +16,6 @@ import (
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
-	"github.com/cilium/ebpf/btf"
-	"github.com/cilium/ebpf/features"
 	"github.com/sagernet/sing/common/control"
 	E "github.com/sagernet/sing/common/exceptions"
 	"golang.org/x/sys/unix"
@@ -48,7 +46,6 @@ type SelfBypass struct {
 	access            sync.RWMutex
 	capacity          uint32
 	sockets           *CiliumEBPF.Map
-	storage           *CiliumEBPF.Map
 	closed            bool
 	programs          []*CiliumEBPF.Program
 	links             []cgroupProgramLink
@@ -117,18 +114,10 @@ const (
 	selfBypassOwnerCgroupTGID      = "cgroup_tgid"
 	selfBypassOwnerCgroupAddr      = "cgroup_addr"
 	selfBypassOwnerCookieHash      = "cookie_hash"
-	selfBypassMetadataSKStorage    = "sk_storage"
 	selfBypassMetadataCookieHash   = "cookie_hash"
-	selfBypassCleanupSKStorage     = "sk_storage"
 	selfBypassCleanupSocketRelease = "socket_release"
 	selfBypassCleanupUserspace     = "userspace_unregister"
 	selfBypassCleanupProcFD        = "proc_fd_reclaim"
-	// struct bpf_sock_addr places the kernel socket pointer after the writable
-	// address fields. __bpf_md_ptr is explicitly 8-byte aligned, so this is
-	// offset 64 on both 32-bit and 64-bit kernels. Keep this ABI local to the
-	// generated socket-address instructions instead of exporting a packet/data-
-	// plane layout constant.
-	bpfSockAddrSocketOffset = 64
 )
 
 // CleanupMode reports how entries in the self-bypass map are removed.
@@ -141,32 +130,6 @@ func (m SelfBypassMode) CleanupMode() string {
 		return "socket_release"
 	default:
 		return "userspace_unregister"
-	}
-}
-
-// selfBypassStorageKeyType and selfBypassStorageValueType describe the
-// minimal ABI required by BPF_MAP_TYPE_SK_STORAGE. The kernel requires a
-// four-byte integer key even though the BPF helper receives the socket pointer
-// directly. The key is used only by userspace map operations and is not part of
-// the kernel-side lookup path.
-func selfBypassStorageKeyType() btf.Type {
-	return &btf.Int{Name: "int", Size: 4, Encoding: btf.Signed}
-}
-
-func selfBypassStorageValueType() btf.Type {
-	return &btf.Int{Name: "__u32", Size: 4, Encoding: btf.Unsigned}
-}
-
-func selfBypassStorageMapSpec() *CiliumEBPF.MapSpec {
-	return &CiliumEBPF.MapSpec{
-		Name:       "sb_self_storage",
-		Type:       CiliumEBPF.SkStorage,
-		KeySize:    4,
-		ValueSize:  4,
-		MaxEntries: 0,
-		Flags:      bpfFlagNoPrealloc,
-		Key:        selfBypassStorageKeyType(),
-		Value:      selfBypassStorageValueType(),
 	}
 }
 
@@ -233,43 +196,6 @@ func (b *SelfBypass) prepareMapLocked() (*CiliumEBPF.Map, error) {
 	return sockets, nil
 }
 
-func selfBypassStorageHelpersAvailable(programType CiliumEBPF.ProgramType) bool {
-	return features.HaveMapType(CiliumEBPF.SkStorage) == nil &&
-		features.HaveProgramHelper(programType, asm.FnSkStorageGet) == nil &&
-		features.HaveProgramHelper(CiliumEBPF.CGroupSock, asm.FnSkStorageDelete) == nil
-}
-
-// prepareStorageLocked is deliberately independent from the cookie map. The
-// cookie map remains the shared visibility bridge for TC and cgroup programs;
-// socket storage supplies automatic kernel-side lifetime cleanup when the
-// vendor kernel supports the complete helper/map ABI.
-func (b *SelfBypass) prepareStorageLocked(programType CiliumEBPF.ProgramType) error {
-	if b.storage != nil {
-		return nil
-	}
-	if !selfBypassStorageHelpersAvailable(programType) {
-		return E.New("eBPF self-bypass socket storage is unavailable")
-	}
-	memlockErr := raiseMemlockLimit()
-	storage, err := CiliumEBPF.NewMap(selfBypassStorageMapSpec())
-	if err != nil {
-		return E.Cause(explainBPFPermissionError(err, memlockErr), "create eBPF self-bypass socket storage map")
-	}
-	b.storage = storage
-	return nil
-}
-
-func (b *SelfBypass) closeStorageLocked() error {
-	if b == nil || b.storage == nil {
-		return nil
-	}
-	err := b.storage.Close()
-	if err == nil {
-		b.storage = nil
-	}
-	return err
-}
-
 // Map returns the map that must be shared with the local TC programs, or nil
 // before it has been created; use PreparedMap to create it. The map is
 // borrowed: callers must not close or retain it beyond SelfBypass.Close.
@@ -332,29 +258,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		attachErrors = append(attachErrors, E.New("process cgroup contains other processes"))
 	}
 	if exclusive {
-		// Prefer socket-local storage for lifecycle ownership. The cookie hash
-		// remains the shared visibility bridge for TC and cgroup programs.
-		storageAttempted := false
-		if storageErr := b.prepareStorageLocked(CiliumEBPF.CGroupSock); storageErr == nil {
-			storageAttempted = true
-			createReleaseErr := b.attachCgroupSocket(cgroupPath, ownerTGID, b.storage.FD())
-			if createReleaseErr == nil {
-				createReleaseErr = b.verifyOwnerMetadata(false, config)
-				if createReleaseErr == nil {
-					b.setPathDiagnostics(selfBypassOwnerCgroupTGID, selfBypassMetadataSKStorage, selfBypassCleanupSKStorage)
-					b.mode.Store(uint32(SelfBypassCgroupSocket))
-					return nil
-				}
-			}
-			if closeErr := b.closeHooks(); closeErr != nil {
-				return E.Errors(createReleaseErr, closeErr)
-			}
-			_ = b.closeStorageLocked()
-			b.fallbackReason = "sk_storage_verifier_unavailable"
-		} else {
-			b.fallbackReason = "sk_storage_unavailable"
-		}
-		createReleaseErr := b.attachCgroupSocket(cgroupPath, ownerTGID, -1)
+		createReleaseErr := b.attachCgroupSocket(cgroupPath, ownerTGID)
 		if createReleaseErr == nil {
 			createReleaseErr = b.verifyOwnerMetadata(false, config)
 			if createReleaseErr == nil {
@@ -370,24 +274,12 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		if lenOpenCgroupProgramLinks(b.links) > 0 {
 			return E.Errors(attachErrors...)
 		}
-		if storageAttempted {
-			_ = b.closeStorageLocked()
-		}
-		socketAddrStorage := b.prepareStorageLocked(CiliumEBPF.CGroupSockAddr) == nil
-		socketAddrFD := -1
-		if socketAddrStorage {
-			socketAddrFD = b.storage.FD()
-		}
-		socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config, ownerTGID, socketAddrFD)
+		socketAddrErr := b.attachCgroupSocketAddr(cgroupPath, config, ownerTGID)
 		if socketAddrErr == nil {
 			socketAddrErr = b.verifyOwnerMetadata(true, config)
 			if socketAddrErr == nil {
-				if releaseErr := b.attachCgroupRelease(cgroupPath, false, socketAddrFD); releaseErr == nil {
-					if socketAddrStorage {
-						b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataSKStorage, selfBypassCleanupSKStorage)
-					} else {
-						b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupSocketRelease)
-					}
+				if releaseErr := b.attachCgroupRelease(cgroupPath, false); releaseErr == nil {
+					b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupSocketRelease)
 					b.mode.Store(uint32(SelfBypassCgroupSocketAddrRelease))
 					return nil
 				}
@@ -395,15 +287,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 				// registration. The registration wrapper provides exact cleanup;
 				// closed-entry reclamation remains the last-resort safety net.
 				b.fallbackReason = "socket_release_unavailable"
-				if socketAddrStorage {
-					// SK_STORAGE is socket-local and the kernel removes its value
-					// when the socket is released. The release hook is only needed
-					// for the shared cookie bridge, so retain storage when that hook
-					// is unavailable and let userspace unregister the bridge entry.
-					b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataSKStorage, selfBypassCleanupUserspace)
-				} else {
-					b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupUserspace)
-				}
+				b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupUserspace)
 				b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
 				return nil
 			}
@@ -415,7 +299,6 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		if lenOpenCgroupProgramLinks(b.links) > 0 {
 			return E.Errors(attachErrors...)
 		}
-		_ = b.closeStorageLocked()
 	}
 
 	// A release-only hook is safe on a shared cgroup: it only deletes entries
@@ -424,7 +307,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	// optional and must never turn a shared hook into legacy single-program
 	// mode, otherwise the interception backend cannot attach its own
 	// multi-program/link hook afterwards.
-	if releaseErr := b.attachCgroupRelease(cgroupPath, true, -1); releaseErr == nil {
+	if releaseErr := b.attachCgroupRelease(cgroupPath, true); releaseErr == nil {
 		b.setPathDiagnostics(selfBypassOwnerCookieHash, selfBypassMetadataCookieHash, selfBypassCleanupUserspace)
 		b.mode.Store(uint32(SelfBypassUserspaceRelease))
 		b.fallbackReason = "cgroup_socket_hooks_unavailable"
@@ -508,8 +391,7 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 // historical composite SelfBypassMode enum.
 func (b *SelfBypass) OwnershipBackend() string { return b.Diagnostics().OwnerBackend }
 
-// MetadataBackend reports whether socket metadata is backed by sk_storage or
-// the shared cookie hash used by TC.
+// MetadataBackend reports the shared cookie-hash visibility path.
 func (b *SelfBypass) MetadataBackend() string { return b.Diagnostics().MetadataBackend }
 
 // CleanupBackend reports the primary kernel/userspace cleanup path.
@@ -541,12 +423,12 @@ func (b *SelfBypass) FallbackReason() string {
 	return b.fallbackReason
 }
 
-func (b *SelfBypass) attachCgroupSocket(path string, ownerTGID uint32, storageFD int) error {
-	createProgram, err := newSelfBypassCreateProgram(b.sockets.FD(), ownerTGID, storageFD)
+func (b *SelfBypass) attachCgroupSocket(path string, ownerTGID uint32) error {
+	createProgram, err := newSelfBypassCreateProgram(b.sockets.FD(), ownerTGID)
 	if err != nil {
 		return err
 	}
-	releaseProgram, err := newSelfBypassReleaseProgram(b.sockets.FD(), storageFD)
+	releaseProgram, err := newSelfBypassReleaseProgram(b.sockets.FD())
 	if err != nil {
 		_ = createProgram.Close()
 		return err
@@ -572,8 +454,8 @@ func (b *SelfBypass) attachCgroupSocket(path string, ownerTGID uint32, storageFD
 	return nil
 }
 
-func (b *SelfBypass) attachCgroupRelease(path string, shared bool, storageFD int) error {
-	program, err := newSelfBypassReleaseProgram(b.sockets.FD(), storageFD)
+func (b *SelfBypass) attachCgroupRelease(path string, shared bool) error {
+	program, err := newSelfBypassReleaseProgram(b.sockets.FD())
 	if err != nil {
 		return err
 	}
@@ -592,7 +474,7 @@ func (b *SelfBypass) attachCgroupRelease(path string, shared bool, storageFD int
 	return nil
 }
 
-func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroupConfig, ownerTGID uint32, storageFD int) error {
+func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroupConfig, ownerTGID uint32) error {
 	hooks := selfBypassSocketAddrHooks(config)
 	programs := make([]*CiliumEBPF.Program, 0, len(hooks))
 	links := make([]cgroupProgramLink, 0, len(hooks))
@@ -602,7 +484,7 @@ func (b *SelfBypass) attachCgroupSocketAddr(path string, config SelfBypassCgroup
 		return b.closeHooks()
 	}
 	for _, hook := range hooks {
-		program, err := newSelfBypassSocketAddrProgram(b.sockets.FD(), hook, ownerTGID, storageFD)
+		program, err := newSelfBypassSocketAddrProgram(b.sockets.FD(), hook, ownerTGID)
 		if err != nil {
 			return E.Errors(err, closeAttached())
 		}
@@ -641,13 +523,13 @@ func selfBypassSocketAddrHooks(config SelfBypassCgroupConfig) []selfBypassSocket
 	return hooks
 }
 
-func newSelfBypassCreateProgram(mapFD int, ownerTGID uint32, storageFD ...int) (*CiliumEBPF.Program, error) {
+func newSelfBypassCreateProgram(mapFD int, ownerTGID uint32) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
 		Name:         kernelProgramNameSelfCreate,
 		Type:         CiliumEBPF.CGroupSock,
 		AttachType:   CiliumEBPF.AttachCGroupInetSockCreate,
 		License:      "GPL",
-		Instructions: selfBypassCreateInstructions(mapFD, ownerTGID, storageFD...),
+		Instructions: selfBypassCreateInstructions(mapFD, ownerTGID),
 	})
 	if err != nil {
 		return nil, E.Cause(err, "load eBPF self-bypass socket-create hook")
@@ -655,13 +537,13 @@ func newSelfBypassCreateProgram(mapFD int, ownerTGID uint32, storageFD ...int) (
 	return program, nil
 }
 
-func newSelfBypassReleaseProgram(mapFD int, storageFD ...int) (*CiliumEBPF.Program, error) {
+func newSelfBypassReleaseProgram(mapFD int) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
 		Name:         kernelProgramNameSelfRelease,
 		Type:         CiliumEBPF.CGroupSock,
 		AttachType:   CiliumEBPF.AttachCgroupInetSockRelease,
 		License:      "GPL",
-		Instructions: selfBypassReleaseInstructions(mapFD, storageFD...),
+		Instructions: selfBypassReleaseInstructions(mapFD),
 	})
 	if err != nil {
 		return nil, E.Cause(err, "load eBPF self-bypass socket-release hook")
@@ -669,13 +551,13 @@ func newSelfBypassReleaseProgram(mapFD int, storageFD ...int) (*CiliumEBPF.Progr
 	return program, nil
 }
 
-func newSelfBypassSocketAddrProgram(mapFD int, hook selfBypassSocketAddrHook, ownerTGID uint32, storageFD ...int) (*CiliumEBPF.Program, error) {
+func newSelfBypassSocketAddrProgram(mapFD int, hook selfBypassSocketAddrHook, ownerTGID uint32) (*CiliumEBPF.Program, error) {
 	program, err := CiliumEBPF.NewProgram(&CiliumEBPF.ProgramSpec{
 		Name:         hook.kernelProgramName,
 		Type:         CiliumEBPF.CGroupSockAddr,
 		AttachType:   hook.attachType,
 		License:      "GPL",
-		Instructions: selfBypassSocketAddrInstructions(mapFD, ownerTGID, storageFD...),
+		Instructions: selfBypassSocketAddrInstructions(mapFD, ownerTGID),
 	})
 	if err != nil {
 		return nil, E.Cause(err, "load eBPF self-bypass ", hook.hookName, " hook")
@@ -698,49 +580,8 @@ func selfBypassOwnerCheckInstructions(ownerTGID uint32) asm.Instructions {
 	}
 }
 
-func optionalSelfBypassStorageFD(storageFD []int) int {
-	if len(storageFD) == 0 {
-		return -1
-	}
-	return storageFD[0]
-}
-
-func selfBypassStorageMarkInstructions(storageFD int, socketAddr bool) asm.Instructions {
-	if storageFD < 0 {
-		return nil
-	}
-	socket := asm.Instructions{asm.Mov.Reg(asm.R2, asm.R6)}
-	if socketAddr {
-		socket = asm.Instructions{asm.LoadMem(asm.R2, asm.R6, bpfSockAddrSocketOffset, asm.DWord)}
-	}
-	return append(asm.Instructions{
-		asm.LoadMapPtr(asm.R1, storageFD),
-	}, append(socket,
-		asm.Mov.Imm(asm.R3, 0),
-		asm.Mov.Imm(asm.R4, 1), // BPF_LOCAL_STORAGE_GET_F_CREATE
-		asm.FnSkStorageGet.Call(),
-		asm.JEq.Imm(asm.R0, 0, "storage_done"),
-		asm.StoreImm(asm.R0, 0, SocketMetadataSelfBypass, asm.Word),
-		asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("storage_done"),
-	)...)
-}
-
-func selfBypassStorageDeleteInstructions(storageFD int) asm.Instructions {
-	if storageFD < 0 {
-		return nil
-	}
-	return asm.Instructions{
-		asm.Mov.Reg(asm.R6, asm.R1),
-		asm.LoadMapPtr(asm.R1, storageFD),
-		asm.Mov.Reg(asm.R2, asm.R6),
-		asm.FnSkStorageDelete.Call(),
-		asm.Mov.Reg(asm.R1, asm.R6),
-	}
-}
-
-func selfBypassCreateInstructions(mapFD int, ownerTGID uint32, storageFD ...int) asm.Instructions {
+func selfBypassCreateInstructions(mapFD int, ownerTGID uint32) asm.Instructions {
 	instructions := selfBypassOwnerCheckInstructions(ownerTGID)
-	instructions = append(instructions, selfBypassStorageMarkInstructions(optionalSelfBypassStorageFD(storageFD), false)...)
 	return append(instructions,
 		asm.FnGetSocketCookie.Call(),
 		asm.JEq.Imm(asm.R0, 0, "allow"),
@@ -758,9 +599,8 @@ func selfBypassCreateInstructions(mapFD int, ownerTGID uint32, storageFD ...int)
 	)
 }
 
-func selfBypassReleaseInstructions(mapFD int, storageFD ...int) asm.Instructions {
-	instructions := selfBypassStorageDeleteInstructions(optionalSelfBypassStorageFD(storageFD))
-	return append(instructions, socketCookieDeleteInstructions(mapFD)...)
+func selfBypassReleaseInstructions(mapFD int) asm.Instructions {
+	return socketCookieDeleteInstructions(mapFD)
 }
 
 func socketCookieDeleteInstructions(mapFDs ...int) asm.Instructions {
@@ -788,9 +628,8 @@ func socketCookieDeleteInstructions(mapFDs ...int) asm.Instructions {
 	)
 }
 
-func selfBypassSocketAddrInstructions(mapFD int, ownerTGID uint32, storageFD ...int) asm.Instructions {
+func selfBypassSocketAddrInstructions(mapFD int, ownerTGID uint32) asm.Instructions {
 	instructions := selfBypassOwnerCheckInstructions(ownerTGID)
-	instructions = append(instructions, selfBypassStorageMarkInstructions(optionalSelfBypassStorageFD(storageFD), true)...)
 	return append(instructions,
 		asm.FnGetSocketCookie.Call(),
 		asm.JEq.Imm(asm.R0, 0, "allow"),
@@ -1235,7 +1074,6 @@ func (b *SelfBypass) Close() error {
 	if lenOpenCgroupProgramLinks(b.links) > 0 {
 		return closeErr
 	}
-	closeErr = E.Errors(closeErr, b.closeStorageLocked())
 	if b.sockets != nil {
 		closeErr = E.Errors(closeErr, b.sockets.Close())
 		b.sockets = nil
@@ -1249,5 +1087,5 @@ func (b *SelfBypass) IsClosed() bool {
 	}
 	b.access.RLock()
 	defer b.access.RUnlock()
-	return b.closed && b.sockets == nil && b.storage == nil && lenOpenCgroupProgramLinks(b.links) == 0
+	return b.closed && b.sockets == nil && lenOpenCgroupProgramLinks(b.links) == 0
 }
