@@ -137,25 +137,45 @@ func TestSelfBypassStorageUserspaceSocketLifetime(t *testing.T) {
 	}
 	defer storage.Close()
 	conn, rawConn, _ := testSocketCookie(t)
+	duplicateFD := -1
+	defer func() {
+		if duplicateFD >= 0 {
+			_ = unix.Close(duplicateFD)
+		}
+	}()
 	var key int32
 	value := uint32(SocketMetadataSelfBypass)
 	if err = control.Raw(rawConn, func(fd uintptr) error {
 		key = int32(fd)
+		duplicateFD, err = unix.Dup(int(fd))
+		if err != nil {
+			return err
+		}
 		return storage.Update(&key, &value, CiliumEBPF.UpdateAny)
 	}); err != nil {
 		_ = conn.Close()
 		t.Fatalf("publish socket-local metadata: %v", err)
 	}
+	duplicateKey := int32(duplicateFD)
 	var actual uint32
-	if err = storage.Lookup(&key, &actual); err != nil || actual != value {
+	if err = storage.Lookup(&duplicateKey, &actual); err != nil || actual != value {
 		_ = conn.Close()
-		t.Fatalf("lookup socket-local metadata: value=%d err=%v", actual, err)
+		t.Fatalf("lookup socket-local metadata through duplicate: value=%d err=%v", actual, err)
 	}
 	if err = conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err = storage.Lookup(&key, &actual); !errors.Is(err, CiliumEBPF.ErrKeyNotExist) && !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("socket-local metadata survived close: %v", err)
+	actual = 0
+	if err = storage.Lookup(&duplicateKey, &actual); err != nil || actual != value {
+		t.Fatalf("socket-local metadata did not follow the duplicated socket: value=%d err=%v", actual, err)
+	}
+	if err = unix.Close(duplicateFD); err != nil {
+		t.Fatal(err)
+	}
+	duplicateFD = -1
+	if err = storage.Lookup(&duplicateKey, &actual); !errors.Is(err, unix.EBADF) &&
+		!errors.Is(err, CiliumEBPF.ErrKeyNotExist) && !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("closed socket descriptor unexpectedly remained usable: %v", err)
 	}
 }
 
