@@ -43,6 +43,7 @@ type (
 	SelfBypassCgroupConfig         = core.SelfBypassCgroupConfig
 	SelfBypassMode                 = core.SelfBypassMode
 	SelfBypassDiagnostics          = core.SelfBypassDiagnostics
+	SocketRegistration             = core.SocketRegistration
 	ProcessSocketOwner             = core.ProcessSocketOwner
 	ProcessTracker                 = core.ProcessTracker
 	LocalRouteSet                  = core.LocalRouteSet
@@ -110,11 +111,11 @@ const (
 	TCLinkFramingEthernet    = core.TCLinkFramingEthernet
 	TCLinkFramingRawIP       = core.TCLinkFramingRawIP
 
-	SelfBypassUserspace        = core.SelfBypassUserspace
-	SelfBypassCgroupSocket     = core.SelfBypassCgroupSocket
+	SelfBypassUserspace               = core.SelfBypassUserspace
+	SelfBypassCgroupSocket            = core.SelfBypassCgroupSocket
 	SelfBypassCgroupSocketAddrRelease = core.SelfBypassCgroupSocketAddrRelease
-	SelfBypassCgroupSocketAddr = core.SelfBypassCgroupSocketAddr
-	SelfBypassUserspaceRelease = core.SelfBypassUserspaceRelease
+	SelfBypassCgroupSocketAddr        = core.SelfBypassCgroupSocketAddr
+	SelfBypassUserspaceRelease        = core.SelfBypassUserspaceRelease
 
 	KernelProbeModeAll    = core.KernelProbeModeAll
 	KernelProbeModeLocal  = core.KernelProbeModeLocal
@@ -183,6 +184,14 @@ func (b *SelfBypass) CleanupMode() string {
 	return core.UnwrapSelfBypass(b).Mode().CleanupMode()
 }
 
+func (b *SelfBypass) NeedsUserspaceRegistration() bool {
+	return b != nil && core.UnwrapSelfBypass(b).NeedsUserspaceRegistration()
+}
+
+func (b *SelfBypass) NeedsUserspaceUnregister() bool {
+	return b != nil && core.UnwrapSelfBypass(b).NeedsUserspaceUnregister()
+}
+
 // Diagnostics reports the actual ownership, metadata, cleanup and attachment
 // backends selected after capability probing and verifier fallback.
 func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
@@ -190,20 +199,6 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 		return core.SelfBypassDiagnostics{}
 	}
 	return core.UnwrapSelfBypass(b).Diagnostics()
-}
-
-func (b *SelfBypass) OwnershipBackend() string {
-	if b == nil {
-		return "cookie_hash"
-	}
-	return core.UnwrapSelfBypass(b).OwnershipBackend()
-}
-
-func (b *SelfBypass) MetadataBackend() string {
-	if b == nil {
-		return "cookie_hash"
-	}
-	return core.UnwrapSelfBypass(b).MetadataBackend()
 }
 
 func (b *SelfBypass) CleanupBackend() string {
@@ -220,7 +215,7 @@ func (b *SelfBypass) FallbackReason() string {
 	return core.UnwrapSelfBypass(b).FallbackReason()
 }
 
-func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
+func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) (SocketRegistration, error) {
 	if b == nil {
 		return core.UnwrapSelfBypass(nil).RegisterSocket(rawConn)
 	}
@@ -234,25 +229,11 @@ func (b *SelfBypass) SocketCookie(rawConn syscall.RawConn) (uint64, error) {
 	return core.UnwrapSelfBypass(b).SocketCookie(rawConn)
 }
 
-func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, error) {
-	if b == nil {
-		return 0, nil
-	}
-	return core.UnwrapSelfBypass(b).RegisterSocketCookie(rawConn)
-}
-
-func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
+func (b *SelfBypass) UnregisterSocket(registration SocketRegistration) error {
 	if b == nil {
 		return nil
 	}
-	return core.UnwrapSelfBypass(b).UnregisterSocket(rawConn)
-}
-
-func (b *SelfBypass) UnregisterCookie(cookie uint64) error {
-	if b == nil {
-		return nil
-	}
-	return core.UnwrapSelfBypass(b).UnregisterCookie(cookie)
+	return core.UnwrapSelfBypass(b).UnregisterSocket(registration)
 }
 
 func (b *SelfBypass) IsClosed() bool {

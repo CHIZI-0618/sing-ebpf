@@ -201,6 +201,23 @@ func TestSelfBypassModes(t *testing.T) {
 	}
 }
 
+func TestSelfBypassLifecycleDimensions(t *testing.T) {
+	bypass := &SelfBypass{}
+	if !bypass.NeedsUserspaceRegistration() || !bypass.NeedsUserspaceUnregister() {
+		t.Fatal("default self-bypass lifecycle does not own userspace registration")
+	}
+	bypass.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerSocketCreate, selfBypassCleanupSocketRelease)
+	diagnostics := bypass.Diagnostics()
+	if diagnostics.DecisionBackend != selfBypassDecisionCgroupTGID ||
+		diagnostics.ProducerBackend != selfBypassProducerSocketCreate ||
+		diagnostics.VisibilityBackend != selfBypassVisibilityCookieHash ||
+		diagnostics.CleanupBackend != selfBypassCleanupSocketRelease ||
+		diagnostics.ReclaimBackend != "none" ||
+		bypass.NeedsUserspaceRegistration() || bypass.NeedsUserspaceUnregister() {
+		t.Fatalf("unexpected cgroup lifecycle: %+v", diagnostics)
+	}
+}
+
 // Consumers construct SelfBypass while building a configuration, which also
 // happens in unprivileged configuration checks. Construction must therefore
 // not create kernel objects.
@@ -224,7 +241,7 @@ func TestNewSelfBypassCreatesNoKernelObject(t *testing.T) {
 	if _, err = bypass.PreparedMap(); !errors.Is(err, errSelfBypassClosed) {
 		t.Fatalf("prepare after close = %v, want errSelfBypassClosed", err)
 	}
-	if err = bypass.RegisterSocket(nil); err != nil {
+	if _, err = bypass.RegisterSocket(nil); err != nil {
 		t.Fatalf("register after close = %v, want nil", err)
 	}
 }
@@ -304,7 +321,7 @@ func TestSelfBypassReclaimsClosedSocketsWhenFull(t *testing.T) {
 	defer live.Close()
 	closed, closedRaw, closedCookie := testSocketCookie(t)
 	for _, rawConn := range []syscall.RawConn{liveRaw, closedRaw} {
-		if _, err = bypass.RegisterSocketCookie(rawConn); err != nil {
+		if _, err = bypass.RegisterSocket(rawConn); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -316,7 +333,7 @@ func TestSelfBypassReclaimsClosedSocketsWhenFull(t *testing.T) {
 	}
 	next, nextRaw, nextCookie := testSocketCookie(t)
 	defer next.Close()
-	if _, err = bypass.RegisterSocketCookie(nextRaw); err != nil {
+	if _, err = bypass.RegisterSocket(nextRaw); err != nil {
 		t.Fatalf("register into a map full of closed sockets: %v", err)
 	}
 	var value uint32
@@ -327,6 +344,10 @@ func TestSelfBypassReclaimsClosedSocketsWhenFull(t *testing.T) {
 	}
 	if err = sockets.Lookup(&closedCookie, &value); !errors.Is(err, CiliumEBPF.ErrKeyNotExist) {
 		t.Fatalf("closed socket entry was kept: %v", err)
+	}
+	diagnostics := bypass.Diagnostics()
+	if diagnostics.ReclaimAttempts != 1 || diagnostics.ReclaimedSockets != 1 || diagnostics.ReclaimFailures != 0 || diagnostics.ReclaimLastAt == 0 {
+		t.Fatalf("unexpected reclaim diagnostics: %+v", diagnostics)
 	}
 }
 
@@ -358,7 +379,8 @@ func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = bypass.RegisterSocket(rawConn); err != nil {
+	registration, err := bypass.RegisterSocket(rawConn)
+	if err != nil {
 		if errors.Is(err, unix.EPERM) {
 			t.Skipf("BPF maps are unavailable here: %v", err)
 		}
@@ -386,11 +408,10 @@ func TestSelfBypassRegisterSocketCreatesMap(t *testing.T) {
 	// UserspaceRelease uses the kernel hook only as a fallback. The userspace
 	// owner must still be able to remove its entry, and a second removal is
 	// harmless when the kernel hook races with it.
-	bypass.mode.Store(uint32(SelfBypassUserspaceRelease))
-	if err = bypass.UnregisterSocket(rawConn); err != nil {
+	if err = bypass.UnregisterSocket(registration); err != nil {
 		t.Fatalf("userspace-release unregister failed: %v", err)
 	}
-	if err = bypass.UnregisterSocket(rawConn); err != nil {
+	if err = bypass.UnregisterSocket(registration); err != nil {
 		t.Fatalf("userspace-release duplicate unregister failed: %v", err)
 	}
 }

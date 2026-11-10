@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	CiliumEBPF "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
@@ -50,11 +51,17 @@ type SelfBypass struct {
 	programs          []*CiliumEBPF.Program
 	links             []cgroupProgramLink
 	mode              atomic.Uint32
-	ownerBackend      string
+	decisionBackend   string
+	producerBackend   string
+	visibilityBackend string
 	cleanupBackend    string
-	metadataBackend   string
+	reclaimBackend    string
 	attachmentBackend string
 	fallbackReason    string
+	reclaimAttempts   atomic.Uint64
+	reclaimedSockets  atomic.Uint64
+	reclaimFailures   atomic.Uint64
+	reclaimLastAt     atomic.Int64
 }
 
 type SelfBypassCgroupConfig struct {
@@ -102,22 +109,38 @@ func (m SelfBypassMode) String() string {
 // still consume the historical composite enum.
 type SelfBypassDiagnostics struct {
 	Mode              string `json:"mode"`
-	OwnerBackend      string `json:"owner_backend"`
-	MetadataBackend   string `json:"metadata_backend"`
+	DecisionBackend   string `json:"decision_backend"`
+	ProducerBackend   string `json:"producer_backend"`
+	VisibilityBackend string `json:"visibility_backend"`
 	CleanupBackend    string `json:"cleanup_backend"`
-	FallbackCleanup   string `json:"fallback_cleanup"`
+	ReclaimBackend    string `json:"reclaim_backend"`
 	AttachmentBackend string `json:"attachment_backend"`
 	FallbackReason    string `json:"fallback_reason,omitempty"`
+	ReclaimAttempts   uint64 `json:"reclaim_attempts"`
+	ReclaimedSockets  uint64 `json:"reclaimed_sockets"`
+	ReclaimFailures   uint64 `json:"reclaim_failures"`
+	ReclaimLastAt     int64  `json:"reclaim_last_at,omitempty"`
 }
 
+// SocketRegistration is the lifecycle token returned for a userspace-published
+// socket cookie. A zero value means that the selected producer did not require
+// userspace registration.
+type SocketRegistration struct {
+	Cookie uint64
+}
+
+func (r SocketRegistration) Active() bool { return r.Cookie != 0 }
+
 const (
-	selfBypassOwnerCgroupTGID      = "cgroup_tgid"
-	selfBypassOwnerCgroupAddr      = "cgroup_addr"
-	selfBypassOwnerCookieHash      = "cookie_hash"
-	selfBypassMetadataCookieHash   = "cookie_hash"
+	selfBypassDecisionCgroupTGID   = "cgroup_tgid"
+	selfBypassDecisionUserspace    = "userspace_control"
+	selfBypassProducerSocketCreate = "cgroup_sock_create"
+	selfBypassProducerCgroupAddr   = "cgroup_addr"
+	selfBypassProducerUserspace    = "userspace_control"
+	selfBypassVisibilityCookieHash = "cookie_hash"
 	selfBypassCleanupSocketRelease = "socket_release"
 	selfBypassCleanupUserspace     = "userspace_unregister"
-	selfBypassCleanupProcFD        = "proc_fd_reclaim"
+	selfBypassReclaimProcFD        = "proc_fd_reclaim"
 )
 
 // CleanupMode reports how entries in the self-bypass map are removed.
@@ -262,7 +285,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 		if createReleaseErr == nil {
 			createReleaseErr = b.verifyOwnerMetadata(false, config)
 			if createReleaseErr == nil {
-				b.setPathDiagnostics(selfBypassOwnerCgroupTGID, selfBypassMetadataCookieHash, selfBypassCleanupSocketRelease)
+				b.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerSocketCreate, selfBypassCleanupSocketRelease)
 				b.mode.Store(uint32(SelfBypassCgroupSocket))
 				return nil
 			}
@@ -279,7 +302,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 			socketAddrErr = b.verifyOwnerMetadata(true, config)
 			if socketAddrErr == nil {
 				if releaseErr := b.attachCgroupRelease(cgroupPath, false); releaseErr == nil {
-					b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupSocketRelease)
+					b.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerCgroupAddr, selfBypassCleanupSocketRelease)
 					b.mode.Store(uint32(SelfBypassCgroupSocketAddrRelease))
 					return nil
 				}
@@ -287,7 +310,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 				// registration. The registration wrapper provides exact cleanup;
 				// closed-entry reclamation remains the last-resort safety net.
 				b.fallbackReason = "socket_release_unavailable"
-				b.setPathDiagnostics(selfBypassOwnerCgroupAddr, selfBypassMetadataCookieHash, selfBypassCleanupUserspace)
+				b.setPathDiagnostics(selfBypassDecisionCgroupTGID, selfBypassProducerUserspace, selfBypassCleanupUserspace)
 				b.mode.Store(uint32(SelfBypassCgroupSocketAddr))
 				return nil
 			}
@@ -308,7 +331,7 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	// mode, otherwise the interception backend cannot attach its own
 	// multi-program/link hook afterwards.
 	if releaseErr := b.attachCgroupRelease(cgroupPath, true); releaseErr == nil {
-		b.setPathDiagnostics(selfBypassOwnerCookieHash, selfBypassMetadataCookieHash, selfBypassCleanupUserspace)
+		b.setPathDiagnostics(selfBypassDecisionUserspace, selfBypassProducerUserspace, selfBypassCleanupUserspace)
 		b.mode.Store(uint32(SelfBypassUserspaceRelease))
 		b.fallbackReason = "cgroup_socket_hooks_unavailable"
 		return nil
@@ -319,10 +342,16 @@ func (b *SelfBypass) AttachCgroup(config SelfBypassCgroupConfig) error {
 	return E.Errors(attachErrors...)
 }
 
-func (b *SelfBypass) setPathDiagnostics(owner, metadata, cleanup string) {
-	b.ownerBackend = owner
-	b.metadataBackend = metadata
+func (b *SelfBypass) setPathDiagnostics(decision, producer, cleanup string) {
+	b.decisionBackend = decision
+	b.producerBackend = producer
+	b.visibilityBackend = selfBypassVisibilityCookieHash
 	b.cleanupBackend = cleanup
+	if producer == selfBypassProducerUserspace {
+		b.reclaimBackend = selfBypassReclaimProcFD
+	} else {
+		b.reclaimBackend = "none"
+	}
 	b.attachmentBackend = b.currentAttachmentBackend()
 }
 
@@ -354,10 +383,11 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 	if b == nil {
 		return SelfBypassDiagnostics{
 			Mode:              SelfBypassUserspace.String(),
-			OwnerBackend:      selfBypassOwnerCookieHash,
-			MetadataBackend:   selfBypassMetadataCookieHash,
+			DecisionBackend:   selfBypassDecisionUserspace,
+			ProducerBackend:   selfBypassProducerUserspace,
+			VisibilityBackend: selfBypassVisibilityCookieHash,
 			CleanupBackend:    selfBypassCleanupUserspace,
-			FallbackCleanup:   selfBypassCleanupProcFD,
+			ReclaimBackend:    selfBypassReclaimProcFD,
 			AttachmentBackend: "none",
 		}
 	}
@@ -365,21 +395,32 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 	defer b.access.RUnlock()
 	result := SelfBypassDiagnostics{
 		Mode:              SelfBypassMode(b.mode.Load()).String(),
-		OwnerBackend:      b.ownerBackend,
-		MetadataBackend:   b.metadataBackend,
+		DecisionBackend:   b.decisionBackend,
+		ProducerBackend:   b.producerBackend,
+		VisibilityBackend: b.visibilityBackend,
 		CleanupBackend:    b.cleanupBackend,
-		FallbackCleanup:   selfBypassCleanupProcFD,
+		ReclaimBackend:    b.reclaimBackend,
 		AttachmentBackend: b.attachmentBackend,
 		FallbackReason:    b.fallbackReason,
+		ReclaimAttempts:   b.reclaimAttempts.Load(),
+		ReclaimedSockets:  b.reclaimedSockets.Load(),
+		ReclaimFailures:   b.reclaimFailures.Load(),
+		ReclaimLastAt:     b.reclaimLastAt.Load(),
 	}
-	if result.OwnerBackend == "" {
-		result.OwnerBackend = selfBypassOwnerCookieHash
+	if result.DecisionBackend == "" {
+		result.DecisionBackend = selfBypassDecisionUserspace
 	}
-	if result.MetadataBackend == "" {
-		result.MetadataBackend = selfBypassMetadataCookieHash
+	if result.ProducerBackend == "" {
+		result.ProducerBackend = selfBypassProducerUserspace
+	}
+	if result.VisibilityBackend == "" {
+		result.VisibilityBackend = selfBypassVisibilityCookieHash
 	}
 	if result.CleanupBackend == "" {
 		result.CleanupBackend = selfBypassCleanupUserspace
+	}
+	if result.ReclaimBackend == "" {
+		result.ReclaimBackend = selfBypassReclaimProcFD
 	}
 	if result.AttachmentBackend == "" {
 		result.AttachmentBackend = "none"
@@ -387,12 +428,17 @@ func (b *SelfBypass) Diagnostics() SelfBypassDiagnostics {
 	return result
 }
 
-// OwnershipBackend reports the selected owner path without exposing the
-// historical composite SelfBypassMode enum.
-func (b *SelfBypass) OwnershipBackend() string { return b.Diagnostics().OwnerBackend }
+// NeedsUserspaceRegistration reports whether socket controls must publish
+// socket cookies into the shared visibility map.
+func (b *SelfBypass) NeedsUserspaceRegistration() bool {
+	return b.Diagnostics().ProducerBackend == selfBypassProducerUserspace
+}
 
-// MetadataBackend reports the shared cookie-hash visibility path.
-func (b *SelfBypass) MetadataBackend() string { return b.Diagnostics().MetadataBackend }
+// NeedsUserspaceUnregister reports whether the userspace owner must release
+// registrations before closing their sockets.
+func (b *SelfBypass) NeedsUserspaceUnregister() bool {
+	return b.Diagnostics().CleanupBackend == selfBypassCleanupUserspace
+}
 
 // CleanupBackend reports the primary kernel/userspace cleanup path.
 func (b *SelfBypass) CleanupBackend() string { return b.Diagnostics().CleanupBackend }
@@ -676,12 +722,12 @@ func (b *SelfBypass) SocketCookie(rawConn syscall.RawConn) (uint64, error) {
 	return cookie, nil
 }
 
-// RegisterSocketCookie records a socket and returns its cookie. The cookie can
-// be retained by a dial attempt and removed after a failed connect, when the
+// registerSocket records a socket and returns a lifecycle token. The token can
+// be retained by a dial attempt and released after a failed connect, when the
 // original file descriptor has already been closed by net.Dialer.
-func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, error) {
+func (b *SelfBypass) registerSocket(rawConn syscall.RawConn) (SocketRegistration, error) {
 	if b == nil {
-		return 0, nil
+		return SocketRegistration{}, nil
 	}
 	b.access.RLock()
 	if b.sockets == nil && !b.closed {
@@ -690,34 +736,43 @@ func (b *SelfBypass) RegisterSocketCookie(rawConn syscall.RawConn) (uint64, erro
 		// a failure fails the socket rather than leaving it unregistered.
 		b.access.RUnlock()
 		if _, err := b.PreparedMap(); err != nil && !errors.Is(err, errSelfBypassClosed) {
-			return 0, err
+			return SocketRegistration{}, err
 		}
 		b.access.RLock()
 	}
 	defer b.access.RUnlock()
 	if b.sockets == nil {
-		return 0, nil
+		return SocketRegistration{}, nil
 	}
 	cookie, err := b.SocketCookie(rawConn)
 	if err != nil {
-		return 0, E.Cause(err, "read socket cookie for eBPF self-bypass")
+		return SocketRegistration{}, E.Cause(err, "read socket cookie for eBPF self-bypass")
 	}
 	value := uint32(1)
 	err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny)
-	if errors.Is(err, unix.E2BIG) && b.reclaimClosedSockets() > 0 {
-		err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny)
+	if errors.Is(err, unix.E2BIG) {
+		b.reclaimAttempts.Add(1)
+		b.reclaimLastAt.Store(time.Now().UnixNano())
+		reclaimed, reclaimErr := b.reclaimClosedSockets()
+		b.reclaimedSockets.Add(uint64(reclaimed))
+		if reclaimErr != nil {
+			b.reclaimFailures.Add(1)
+		}
+		if reclaimed > 0 {
+			err = b.sockets.Update(&cookie, &value, CiliumEBPF.UpdateAny)
+		}
 	}
 	if err != nil {
-		return 0, E.Cause(err, "register eBPF self-bypass socket")
+		return SocketRegistration{}, E.Cause(err, "register eBPF self-bypass socket")
 	}
-	return cookie, nil
+	return SocketRegistration{Cookie: cookie}, nil
 }
 
 // reclaimClosedSockets removes self-bypass entries whose socket is no longer
 // open in this process. It runs only after a map-full update failure, so the
 // normal registration path remains one cookie read and one map update.
 // Process-tracker policy entries are deliberately left untouched.
-func (b *SelfBypass) reclaimClosedSockets() int {
+func (b *SelfBypass) reclaimClosedSockets() (int, error) {
 	var (
 		cookie    uint64
 		metadata  uint32
@@ -730,19 +785,29 @@ func (b *SelfBypass) reclaimClosedSockets() int {
 		}
 	}
 	if entries.Err() != nil || len(candidate) == 0 {
-		return 0
+		return 0, entries.Err()
 	}
 	open, err := openSocketCookies()
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	var reclaimed int
+	var (
+		reclaimed int
+		deleteErr error
+	)
 	for _, cookie := range candidate {
-		if _, loaded := open[cookie]; !loaded && b.sockets.Delete(&cookie) == nil {
-			reclaimed++
+		if _, loaded := open[cookie]; loaded {
+			continue
+		}
+		if err = b.sockets.Delete(&cookie); err == nil || errors.Is(err, CiliumEBPF.ErrKeyNotExist) {
+			if err == nil {
+				reclaimed++
+			}
+		} else {
+			deleteErr = errors.Join(deleteErr, err)
 		}
 	}
-	return reclaimed
+	return reclaimed, deleteErr
 }
 
 // openSocketCookies returns cookies for all sockets currently open in this
@@ -766,42 +831,20 @@ func openSocketCookies() (map[uint64]struct{}, error) {
 	return open, nil
 }
 
-// RegisterSocket records a socket created by the consumer when cgroup hooks
-// cannot mark it automatically. It performs one SO_COOKIE read and one map
-// update per socket.
-func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) error {
-	if b == nil {
-		return nil
+// RegisterSocket publishes a socket only when the selected producer requires
+// userspace control. The returned token owns any required userspace cleanup.
+func (b *SelfBypass) RegisterSocket(rawConn syscall.RawConn) (SocketRegistration, error) {
+	if b == nil || !b.NeedsUserspaceRegistration() {
+		return SocketRegistration{}, nil
 	}
-	mode := b.Mode()
-	if mode != SelfBypassUserspace && mode != SelfBypassCgroupSocketAddr && mode != SelfBypassUserspaceRelease {
-		// Cgroup hooks already cover this socket. Do not grow the fallback map.
-		return nil
-	}
-	_, err := b.RegisterSocketCookie(rawConn)
-	return err
+	return b.registerSocket(rawConn)
 }
 
-// UnregisterSocket removes a socket previously registered by RegisterSocket.
-// Call it before closing the socket. A kernel release hook may also delete the
-// same entry; deletion is intentionally idempotent for that dual-cleanup path.
-// The cookie is read from the supplied live socket, so deletion cannot target
-// a different socket that reused an old descriptor.
-func (b *SelfBypass) UnregisterSocket(rawConn syscall.RawConn) error {
-	if b == nil {
-		return nil
-	}
-	cookie, err := b.SocketCookie(rawConn)
-	if err != nil {
-		return E.Cause(err, "read socket cookie for eBPF self-bypass unregister")
-	}
-	return b.UnregisterCookie(cookie)
-}
-
-// UnregisterCookie removes a previously registered socket by its stable
-// kernel cookie. It is safe to call after the file descriptor has closed.
-func (b *SelfBypass) UnregisterCookie(cookie uint64) error {
-	if b == nil || cookie == 0 {
+// UnregisterSocket releases a token returned by RegisterSocket. Deletion is
+// idempotent because a kernel release hook may already have removed the same
+// cookie on a fallback path.
+func (b *SelfBypass) UnregisterSocket(registration SocketRegistration) error {
+	if b == nil || !registration.Active() || !b.NeedsUserspaceUnregister() {
 		return nil
 	}
 	b.access.RLock()
@@ -809,7 +852,7 @@ func (b *SelfBypass) UnregisterCookie(cookie uint64) error {
 	if b.sockets == nil {
 		return nil
 	}
-	if err := b.sockets.Delete(&cookie); err != nil {
+	if err := b.sockets.Delete(&registration.Cookie); err != nil {
 		if errors.Is(err, CiliumEBPF.ErrKeyNotExist) || errors.Is(err, unix.ENOENT) {
 			return nil
 		}
@@ -1054,9 +1097,11 @@ func (b *SelfBypass) closeHooks() error {
 	b.links = nil
 	b.programs = nil
 	b.mode.Store(uint32(SelfBypassUserspace))
-	b.ownerBackend = selfBypassOwnerCookieHash
-	b.metadataBackend = selfBypassMetadataCookieHash
+	b.decisionBackend = selfBypassDecisionUserspace
+	b.producerBackend = selfBypassProducerUserspace
+	b.visibilityBackend = selfBypassVisibilityCookieHash
 	b.cleanupBackend = selfBypassCleanupUserspace
+	b.reclaimBackend = selfBypassReclaimProcFD
 	b.attachmentBackend = "none"
 	return closeErr
 }
